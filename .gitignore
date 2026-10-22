@@ -225,6 +225,8 @@ install/
 log/
 
 # dane i modele trzymamy poza repo
+data/
+results/
 *.mcap
 *.db3
 *.pt
