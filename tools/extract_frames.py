@@ -137,6 +137,7 @@ def extract_bag(
     max_dt_ns: int,
     ulozenie: str,
     swiatlo: str,
+    yaw_deg: str = '',
 ) -> list[dict[str, str | int]]:
     """Extract frames for one bag; return index rows (may be empty)."""
     bag_dir = bags_dir / bag_name
@@ -187,6 +188,7 @@ def extract_bag(
                 'depth_path': depth_rel.as_posix(),
                 'ulozenie': ulozenie,
                 'swiatlo': swiatlo,
+                'yaw_deg': yaw_deg,
             }
         )
 
@@ -222,11 +224,20 @@ def main(argv: list[str] | None = None) -> int:
                 max_dt_ns=max_dt_ns,
                 ulozenie=row.get('ulozenie', ''),
                 swiatlo=row.get('swiatlo', ''),
+                yaw_deg=row.get('yaw_deg', '') or '',
             )
         )
 
     index_path = out_dir / 'index.csv'
-    fieldnames = ['bag', 'frame', 'color_path', 'depth_path', 'ulozenie', 'swiatlo']
+    fieldnames = [
+        'bag',
+        'frame',
+        'color_path',
+        'depth_path',
+        'ulozenie',
+        'swiatlo',
+        'yaw_deg',
+    ]
     with index_path.open('w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
