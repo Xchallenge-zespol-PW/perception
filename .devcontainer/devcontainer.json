@@ -1,0 +1,29 @@
+{
+  "name": "perception (ROS 2 Humble)",
+  "build": { "dockerfile": "../docker/Dockerfile", "context": "../docker" },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/ws,type=bind",
+  "workspaceFolder": "/ws",
+  "remoteUser": "dev",
+  "initializeCommand": "mkdir -p ${localEnv:HOME}/bags && (xhost +local:docker >/dev/null 2>&1 || true)",
+  "runArgs": ["--name", "rs", "--privileged", "--network=host", "--ipc=host"],
+  "mounts": [
+    "source=/dev,target=/dev,type=bind",
+    "source=/run/udev,target=/run/udev,type=bind,readonly",
+    "source=/etc/localtime,target=/etc/localtime,type=bind,readonly",
+    "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind",
+    "source=${localEnv:HOME}/bags,target=/bags,type=bind"
+  ],
+  "containerEnv": { "DISPLAY": "${localEnv:DISPLAY}", "QT_X11_NO_MITSHM": "1" },
+  "postCreateCommand": "git config --global --add safe.directory /ws",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python"],
+      "settings": {
+        "python.analysis.extraPaths": [
+          "/opt/ros/humble/lib/python3.10/site-packages",
+          "/opt/ros/humble/local/lib/python3.10/dist-packages"
+        ]
+      }
+    }
+  }
+}

@@ -218,3 +218,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# colcon
+build/
+install/
+log/
+
+# dane i modele trzymamy poza repo
+*.mcap
+*.db3
+*.pt
+*.onnx
+*.engine
