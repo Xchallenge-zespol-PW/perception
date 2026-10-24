@@ -226,6 +226,7 @@ log/
 
 # dane i modele trzymamy poza repo
 data/
+datasets/
 results/
 *.mcap
 *.db3
