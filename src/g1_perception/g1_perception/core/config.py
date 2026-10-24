@@ -86,6 +86,11 @@ def load_rois(path: Path | None = None) -> list[Roi]:
             y1: 120
     """
     cfg_path = resolve_config_path('rois.yaml', path)
+    if not cfg_path.is_file():
+        raise FileNotFoundError(
+            f'Missing {cfg_path}. Create it with:\n'
+            f'  python3 tools/roi_picker.py data/frames/<bag>/0_color.png'
+        )
     with cfg_path.open(encoding='utf-8') as f:
         data = yaml.safe_load(f) or {}
 
@@ -115,6 +120,11 @@ def load_hsv(path: Path | None = None) -> HsvConfig:
     ``h_min``, ``h_max``, ``s_min``, ``s_max``, ``v_min``, ``v_max``.
     """
     cfg_path = resolve_config_path('hsv.yaml', path)
+    if not cfg_path.is_file():
+        raise FileNotFoundError(
+            f'Missing {cfg_path}. Create it with:\n'
+            f'  python3 tools/hsv_tuner.py'
+        )
     with cfg_path.open(encoding='utf-8') as f:
         data = yaml.safe_load(f) or {}
 
