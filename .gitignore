@@ -228,6 +228,7 @@ log/
 data/
 datasets/
 results/
+runs/
 *.mcap
 *.db3
 *.pt
