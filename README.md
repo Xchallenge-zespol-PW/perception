@@ -6,57 +6,68 @@ Percepcja kostek dla robota **Unitree G1 EDU**: na 4 znanych miejscach stołu wy
 
 ## Architektura
 
-Pipeline ma wymienne etapy wybierane z konfiguracji:
-
 ```text
 Frame (RGB + depth + K)
         │
         ▼
-   Segmenter  →  list[Detection]
+   Segmenter  →  list[Detection]     # "hsv" | "yolo_seg"
         │
         ▼
- PoseEstimator  →  Pose | None   (per detection)
+ PoseEstimator  →  Pose | None       # "centroid" | "geometric"
 ```
 
-- Typy i protokoły: `g1_perception.core.types`
-- Rejestr implementacji + składanie z dict: `g1_perception.pipeline`
-- Kalibracja ROI / HSV: `g1_perception.core.config` + YAML w `src/g1_perception/config/`
-- Offline dane: `tools/` → `data/` (gitignored)
-- Nagrania: MCAP w `/bags`, etykiety w `/bags/labels.csv`
+| Warstwa | Co jest |
+|---------|---------|
+| `core.types` | `Frame`, `Detection`, `Pose`, protokoły |
+| `core.config` | ROI / HSV z YAML |
+| `core.dataset` | `load_frame` z `data/index.csv` |
+| `core.geometry` | deprojekcja, RANSAC płaszczyzny, poza kostki |
+| `pipeline` | `@register`, `Pipeline.from_config` / `process` |
+| `segmenters/` | `hsv`, `yolo_seg` |
+| `pose/` | `centroid`, `geometric` |
+| `tools/` | nagranie → klatki → kalibracja → autolabel → trenowanie |
 
-Planowane (jeszcze nie w repo): `segmenters/`, `pose/`, węzeł ROS 2, `evaluate`.
+Planowane (jeszcze nie w repo): węzeł ROS 2, `evaluate`, eksport TensorRT (`.engine` już obsługiwany w loaderze).
 
 ## Struktura repo
 
 ```text
 /ws
-├── docker/Dockerfile          # obraz ROS Humble + RealSense + OpenCV + rosbags
-├── .devcontainer/             # montuje /ws i /bags, sieć host, GPU/udev
-├── src/g1_perception/         # pakiet ament_python
-│   ├── config/                # rois.yaml, hsv.yaml (tworzone narzędziami)
+├── docker/Dockerfile              # ROS Humble + RealSense + OpenCV + rosbags
+├── .devcontainer/                 # /ws, /bags, sieć host, udev
+├── src/g1_perception/             # pakiet ament_python
+│   ├── config/                    # rois.yaml, hsv.yaml (narzędzia)
 │   ├── g1_perception/
 │   │   ├── core/
-│   │   │   ├── types.py       # Frame, Detection, Pose, Segmenter, PoseEstimator
-│   │   │   ├── dataset.py     # load_frame(row) z data/index.csv
-│   │   │   └── config.py      # load/save ROI i HSV
-│   │   └── pipeline.py        # @register, Pipeline.from_config / process
-│   └── test/                  # pytest
-├── tools/                     # skrypty offline (bez rclpy w logice)
-├── data/                      # wyekstrahowane klatki + index.csv (gitignore)
-└── results/                   # wyniki ewaluacji (gitignore)
+│   │   │   ├── types.py
+│   │   │   ├── dataset.py
+│   │   │   ├── config.py
+│   │   │   └── geometry.py
+│   │   ├── segmenters/
+│   │   │   ├── hsv.py             # @register("hsv")
+│   │   │   └── yolo_seg.py        # @register("yolo_seg")
+│   │   ├── pose/
+│   │   │   ├── centroid.py        # @register("centroid")
+│   │   │   └── geometric.py       # @register("geometric")
+│   │   └── pipeline.py
+│   └── test/
+├── tools/
+│   ├── record_cubes.sh
+│   ├── labels_csv.py
+│   ├── extract_frames.py
+│   ├── roi_picker.py
+│   ├── hsv_tuner.py
+│   ├── autolabel.py               # Grounded SAM → YOLO-seg dataset
+│   └── train_yolo.py              # Ultralytics yolo11n-seg
+├── data/                          # klatki + index.csv (gitignore)
+├── datasets/                      # cubes_seg / (gitignore)
+├── runs/                          # trening YOLO (gitignore)
+└── results/                       # ewaluacja (gitignore)
 ```
 
-Poza repo (bind mount w kontenerze):
-
-| Ścieżka | Zawartość |
-|---------|-----------|
-| `/bags/` | foldery rosbagów MCAP + `labels.csv` |
-| `/bags/<bag>/` | `*.mcap` + `metadata.yaml` |
+Poza repo (bind mount): `/bags/` — MCAP + `labels.csv`.
 
 ## Uruchomienie środowiska
-
-1. Otwórz repo w VS Code / Cursor → **Reopen in Container**.
-2. W kontenerze (katalog `/ws`):
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -64,42 +75,42 @@ colcon build --symlink-install --packages-select g1_perception
 source install/setup.bash
 ```
 
-Przy `--symlink-install` zmiany w `.py` zwykle nie wymagają rebuildu (poza `setup.py` / `package.xml`).
-
 ### Testy
 
 ```bash
-# z /ws, po source install/setup.bash
-cd src/g1_perception && python3 -m pytest -q && cd /ws
+# zalecane w tym kontenerze (konflikt anyio / systemowy pytest 6.2)
+cd /ws/src/g1_perception && python3 -m pytest -p no:anyio -q && cd /ws
 
-# albo przez colcon (w tym lintery ament)
 colcon test --packages-select g1_perception
 colcon test-result --verbose
 ```
 
-Uwaga: komenda `pytest` może nie być w `PATH` — używaj `python3 -m pytest`.
+Nie instaluj `pytest>=7` przez `pip --user` — gryzie się z pluginami ROS (`launch_testing`).
 
 ---
 
 ## Typowy workflow offline
 
 ```text
-1. Nagraj bag          tools/record_cubes.sh
-2. Wyciągnij klatki    tools/extract_frames.py
-3. Zaznacz ROI         tools/roi_picker.py
-4. Ustaw HSV           tools/hsv_tuner.py
-5. (dalej) segmentacja / poza / evaluate
+1. Nagraj bag                 ./tools/record_cubes.sh ...
+2. Wyciągnij klatki           python3 tools/extract_frames.py
+3. Zaznacz ROI                python3 tools/roi_picker.py <png>
+4. Ustaw HSV                  python3 tools/hsv_tuner.py
+5a. Baseline HSV+geometric    Pipeline.from_config(hsv / geometric)
+5b. Albo dataset YOLO         python3 tools/autolabel.py --visualize
+6. Trenuj YOLO-seg            python3 tools/train_yolo.py
+7. Inference YOLO             Pipeline.from_config(yolo_seg / geometric)
 ```
 
 ---
 
 ## Narzędzia (`tools/`)
 
-Wszystkie komendy poniżej zakładają `cwd=/ws` oraz `source install/setup.bash` (tam gdzie importują `g1_perception`).
+Komendy z `cwd=/ws` i `source install/setup.bash`.
 
 ### `record_cubes.sh` — nagrywanie baga
 
-Wymaga działającej kamery RealSense (topici color + aligned depth).
+Wymaga działającej kamery RealSense.
 
 ```bash
 ./tools/record_cubes.sh <ulozenie> <swiatlo> [czas_s] [uwagi] [yaw_deg]
@@ -107,26 +118,20 @@ Wymaga działającej kamery RealSense (topici color + aligned depth).
 
 | Argument | Opis |
 |----------|------|
-| `ulozenie` | litery `R` / `G` / `X` od lewej (np. `RGGR`, `RXGR`) |
-| `swiatlo` | etykieta warunków (np. `dzienne`, `mocne`) |
-| `czas_s` | czas nagrania w sekundach (domyślnie `15`) |
-| `uwagi` | dowolny tekst |
-| `yaw_deg` | kąty yaw w stopniach, po przecinku; tyle pól ile liter w ułożeniu; dla `X` puste pole |
-
-Przykłady:
+| `ulozenie` | `R` / `G` / `X` od lewej (np. `RGGR`) |
+| `swiatlo` | np. `dzienne`, `mocne` |
+| `czas_s` | sekundy (domyślnie `15`) |
+| `uwagi` | tekst |
+| `yaw_deg` | kąty w stopniach po przecinku; dla `X` puste pole |
 
 ```bash
-./tools/record_cubes.sh RGGR dzienne 15 "lekki odblask"
 ./tools/record_cubes.sh RGGR mocne 15 "" "0,15,45,30"
 ./tools/record_cubes.sh RXGR mocne 15 "" "0,,45,30"
 ```
 
-Zapisuje MCAP do `/bags/kostki_<ulozenie>_<swiatlo>_<timestamp>/` i dopisuje wiersz do `/bags/labels.csv`.  
-Przy pierwszym uruchomieniu dopisze kolumnę `yaw_deg` do starego CSV (puste wartości).
+Zapis: `/bags/kostki_.../` + wiersz w `/bags/labels.csv` (przy pierwszym uruchomieniu dopisze kolumnę `yaw_deg`).
 
-### `labels_csv.py` — helper CSV (używany przez `record_cubes.sh`)
-
-Zwykle nie trzeba odpalać ręcznie:
+### `labels_csv.py` — helper CSV
 
 ```bash
 python3 tools/labels_csv.py ensure /bags/labels.csv
@@ -135,52 +140,40 @@ python3 tools/labels_csv.py append /bags/labels.csv \
   --uwagi "" --yaw-deg "0,15,45,30"
 ```
 
-### `extract_frames.py` — klatki z bagów do `data/`
+### `extract_frames.py` — klatki z MCAP
 
-Czyta `/bags/labels.csv` biblioteką **rosbags** (bez `rclpy`). Dla każdego baga z `metadata.yaml` zapisuje co N-tą klatkę kolorową z dopasowaną głębią (max Δt = 20 ms).
+Biblioteka **rosbags** (bez `rclpy`). Sync kolor↔głębia ≤ 20 ms.
 
 ```bash
 python3 tools/extract_frames.py
 python3 tools/extract_frames.py --every 5
-python3 tools/extract_frames.py --bags-dir /bags --labels /bags/labels.csv --out-dir data
 ```
 
 | Flaga | Domyślnie | Opis |
 |-------|-----------|------|
-| `--every` | `10` | co którą klatkę kolorową brać |
-| `--max-dt-ms` | `20` | max różnica czasu kolor↔głębia |
-| `--out-dir` | `data` | katalog wyjściowy |
-
-Wyjście:
+| `--every` | `10` | co którą klatkę kolorową |
+| `--max-dt-ms` | `20` | max Δt kolor↔głębia |
+| `--out-dir` | `data` | wyjście |
 
 ```text
 data/frames/<bag>/<nr>_color.png
-data/frames/<bag>/<nr>_depth.npy      # float32, metry; 0 = brak pomiaru
-data/frames/<bag>/camera_info.json  # K, width, height
-data/index.csv                      # bag, frame, ścieżki, ulozenie, swiatlo, yaw_deg
+data/frames/<bag>/<nr>_depth.npy      # float32 [m], 0 = brak
+data/frames/<bag>/camera_info.json
+data/index.csv                        # + ulozenie, swiatlo, yaw_deg
 ```
 
-Bagi bez `metadata.yaml` są pomijane z ostrzeżeniem.
-
-### `roi_picker.py` — zaznaczanie miejsc kostek
-
-GUI OpenCV (`cv2.selectROIs`). Kolejność zaznaczeń = `slot` 0, 1, 2, …
+### `roi_picker.py` — miejsca kostek
 
 ```bash
 python3 tools/roi_picker.py data/frames/<bag>/0_color.png
-python3 tools/roi_picker.py data/frames/<bag>/0_color.png --output src/g1_perception/config/rois.yaml
 ```
 
-Sterowanie w oknie: przeciągnij prostokąt → **ENTER/SPACE** (kolejny) → **ESC** (koniec).  
-Zapis: `src/g1_perception/config/rois.yaml` (lista `{slot, x0, y0, x1, y1}`).
+Kolejność zaznaczeń = `slot` 0,1,2,… → `src/g1_perception/config/rois.yaml`.
 
-### `hsv_tuner.py` — strojenie progów HSV
-
-Przegląda klatki z `data/index.csv`, nakłada maskę czerwony/zielony i ramki ROI.
+### `hsv_tuner.py` — progi HSV
 
 ```bash
 python3 tools/hsv_tuner.py
-python3 tools/hsv_tuner.py --index data/index.csv --rois src/g1_perception/config/rois.yaml
 ```
 
 | Klawisz | Akcja |
@@ -189,66 +182,107 @@ python3 tools/hsv_tuner.py --index data/index.csv --rois src/g1_perception/confi
 | `s` | zapisz `hsv.yaml` |
 | `q` / `ESC` | wyjście |
 
-Suwaki: dwa zakresy hue dla czerwonego (`red_low` ~0–10, `red_high` ~170–180) oraz zielony (`green`), każdy z S/V.  
-Zapis: `src/g1_perception/config/hsv.yaml`.
+### `autolabel.py` — Grounded SAM → YOLO-seg
+
+Ontologia `{"cube": "kostka"}`. Kolor klasy z ROI + `ulozenie` (R→`czerwona`=0, G→`zielona`=1). Split **po bagach**.
+
+```bash
+# Colab GPU zalecany
+pip install autodistill autodistill-grounded-sam supervision
+python3 tools/autolabel.py --index data/index.csv --visualize
+```
+
+Wyjście: `datasets/cubes_seg/{images,labels}/{train,val}/`, `data.yaml`, opcjonalnie `visualizations/`.
+
+### `train_yolo.py` — trening Ultralytics
+
+```bash
+pip install ultralytics
+python3 tools/train_yolo.py
+python3 tools/train_yolo.py --epochs 100 --device 0 --batch 8 \
+  --data datasets/cubes_seg/data.yaml --model yolo11n-seg.pt
+```
+
+Wagi: `runs/seg/cubes/weights/best.pt`.
 
 ---
 
-## Moduły Pythona (`g1_perception`)
+## Moduły Pythona
 
-### `core.types` — typy danych
+### `core.types`
 
 | Typ | Pola |
 |-----|------|
-| `Frame` | `rgb` HxWx3 uint8, `depth_m` HxW float32 (m), `K` 3×3, `stamp` |
+| `Frame` | `rgb` HxWx3 uint8, `depth_m` HxW float32, `K` 3×3, `stamp` |
 | `Detection` | `slot`, `label`, `score`, `mask` HxW bool |
 | `Pose` | `position` (3,), `quat` xyzw (4,), `score` |
-| `Segmenter` | protokół: `segment(frame) -> list[Detection]` |
-| `PoseEstimator` | protokół: `estimate(frame, det) -> Pose \| None` |
+| `Segmenter` | `segment(frame) -> list[Detection]` |
+| `PoseEstimator` | `estimate(frame, det) -> Pose \| None` |
 
-### `core.dataset` — ładowanie klatki z indeksu
+### `core.dataset`
 
 ```python
 from g1_perception.core.dataset import load_frame
-
-frame = load_frame(row)              # row = dict z data/index.csv
-frame = load_frame(row, root=Path('/ws'))
+frame = load_frame(row)  # wiersz z data/index.csv
 ```
 
-Czyta PNG + `.npy` + `camera_info.json` obok kolorowego obrazu.
-
-### `core.config` — ROI i HSV z YAML
+### `core.config`
 
 ```python
-from g1_perception.core.config import load_rois, load_hsv, save_rois, save_hsv
-
-rois = load_rois()       # src/g1_perception/config/rois.yaml
-hsv = load_hsv()         # src/g1_perception/config/hsv.yaml
+from g1_perception.core.config import load_rois, load_hsv
+rois = load_rois()
+hsv = load_hsv()
 ```
 
-Dataclassy: `Roi`, `HsvRange`, `HsvConfig`.
+### `core.geometry`
 
-### `pipeline` — rejestr i uruchomienie
+| Funkcja | Opis |
+|---------|------|
+| `deproject(mask, depth_m, K)` | Nx3 punkty (pomija zera; opcjonalny zakres Z) |
+| `fit_plane_ransac(points)` | `(normal, d, n_inliers)` |
+| `table_plane_around(roi, mask, …)` | płaszczyzna stołu wokół ROI bez maski obiektu |
+| `cube_pose_on_table(points, plane, size=0.05)` | `Pose` (minAreaRect, yaw % 90°, środek + size/2 wzdłuż normalnej) |
+
+### `pipeline`
 
 ```python
-from g1_perception.pipeline import Pipeline, register
-
-@register('my_segmenter')
-class MySegmenter:
-    def __init__(self, **params): ...
-    def segment(self, frame): ...
-
-@register('my_pose')
-class MyPose:
-    def __init__(self, **params): ...
-    def estimate(self, frame, det): ...
+import g1_perception.segmenters  # rejestruje hsv, yolo_seg
+import g1_perception.pose        # rejestruje centroid, geometric
+from g1_perception.pipeline import Pipeline
 
 pipe = Pipeline.from_config({
-    'segmenter': {'name': 'my_segmenter', 'params': {}},
-    'pose_estimator': {'name': 'my_pose', 'params': {}},
+    'segmenter': {
+        'name': 'hsv',
+        'params': {'min_frac': 0.05, 'erode': 1},
+    },
+    'pose_estimator': {
+        'name': 'geometric',
+        'params': {'size': 0.05, 'margin': 20},
+    },
 })
-results = pipe.process(frame)   # list[tuple[Detection, Pose | None]]
+# albo YOLO:
+# 'segmenter': {'name': 'yolo_seg', 'params': {
+#     'model_path': 'runs/seg/cubes/weights/best.pt',
+#     'verify_hsv': True,
+# }}
+results = pipe.process(frame)  # list[(Detection, Pose|None)]
 ```
+
+### Segmentery
+
+| Nazwa | Moduł | Zachowanie |
+|-------|-------|------------|
+| `hsv` | `segmenters/hsv.py` | Per ROI: maski HSV czerwony/zielony, erozja, odsetek ≥ `min_frac` → label; inaczej `nieznany` |
+| `yolo_seg` | `segmenters/yolo_seg.py` | YOLO-seg (`.pt`/`.engine`), `retina_masks=True`, slot gdy pokrycie maski z ROI > 50%; opcjonalnie `verify_hsv` |
+
+Import `ultralytics` tylko wewnątrz `YoloSegSegmenter` (opcjonalna zależność).
+
+### Estymatory pozy
+
+| Nazwa | Moduł | Zachowanie |
+|-------|-------|------------|
+| `centroid` | `pose/centroid.py` | Mediana punktów 3D; orientacja z normalnej stołu |
+| `geometric` | `pose/geometric.py` | `cube_pose_on_table` (RANSAC stołu + minAreaRect) |
 
 ---
 
@@ -256,20 +290,20 @@ results = pipe.process(frame)   # list[tuple[Detection, Pose | None]]
 
 **`/bags/labels.csv`:** `bag`, `ulozenie`, `swiatlo`, `czas_s`, `uwagi`, `yaw_deg`
 
-**Topici w bagach:**
+**Topici:**
 
 - `/camera/camera/color/image_raw` (`rgb8`)
 - `/camera/camera/aligned_depth_to_color/image_raw` (`16UC1`, mm)
 - `/camera/camera/color/camera_info`
 - `/tf_static`
 
-**Ułożenie:** ciąg `R`/`G`/`X` opisujący kolory od lewej (np. `RGGR`).
+**Ułożenie:** `R`/`G`/`X` od lewej (np. `RGGR`).
 
 ---
 
 ## Konfiguracja YAML
 
-Pliki w `src/g1_perception/config/` (tworzone narzędziami, nie commituj lokalnych kalibracji bez potrzeby):
+`src/g1_perception/config/` (lokalna kalibracja — zwykle nie commitować):
 
 **`rois.yaml`**
 
@@ -292,8 +326,22 @@ green:    {h_min: 40,  h_max: 90,  s_min: 40, s_max: 255, v_min: 40, v_max: 255}
 
 ---
 
-## Gitignore (ważne katalogi)
+## Testy jednostkowe (mapa)
 
-- `data/`, `results/` — artefakty lokalne
-- `build/`, `install/`, `log/` — colcon
-- `*.mcap`, wagi modeli (`*.pt`, `*.onnx`, …)
+| Plik | Zakres |
+|------|--------|
+| `test_pipeline.py` | rejestr, `from_config`, przepływ |
+| `test_dataset.py` | `load_frame` |
+| `test_config.py` | ROI / HSV YAML |
+| `test_hsv_segmenter.py` | segmenter HSV (syntetyki) |
+| `test_pose_geometry.py` | geometry + geometric (<5 mm, yaw <2°, szum 2 mm) |
+| `test_yolo_seg.py` | sloty / `verify_hsv` (bez ultralytics) |
+| `test_autolabel_helpers.py` | split bagów, YOLO polygon (bez GPU) |
+
+---
+
+## Gitignore
+
+- `data/`, `datasets/`, `results/`, `runs/`
+- `build/`, `install/`, `log/`
+- `*.mcap`, wagi (`*.pt`, `*.onnx`, `*.engine`, …)
