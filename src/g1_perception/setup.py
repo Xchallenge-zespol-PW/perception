@@ -15,6 +15,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'config'),
             glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'launch'),
+            glob('launch/*.launch.py')),
     ],
     install_requires=['setuptools', 'numpy<2', 'PyYAML'],
     zip_safe=True,
@@ -29,6 +31,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'perception_node = g1_perception.perception_node:main',
         ],
     },
 )

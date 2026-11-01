@@ -24,31 +24,44 @@ Frame (RGB + depth + K)
 | `core.types` | `Frame`, `Detection`, `Pose`, `SlotResult`, stałe etykiet, protokoły |
 | `core.config` | ROI / HSV / mapa etykiet z YAML |
 | `core.labels` | `canonical_label` (nazwa z modelu → etykieta kanoniczna) |
+| `core.voting` | `SlotVoter`: głosowanie po oknie N klatek per slot |
 | `core.dataset` | `load_frame` z `data/index.csv` |
-| `core.geometry` | deprojekcja, RANSAC płaszczyzny, poza kostki |
+| `core.geometry` | deprojekcja, RANSAC płaszczyzny, poza kostki, `transform_pose` |
+| `core.frame_utils` | głębia mm → m, `K` z `camera_info` |
+| `core.debug_vis` | obraz debug (ROI, maski, etykiety, yaw), suma masek mono8 |
 | `pipeline` | `@register`, `Pipeline.from_config` / `process` |
 | `segmenters/` | `hsv`, `yolo_seg` |
 | `pose/` | `centroid`, `geometric` |
+| `node_config` | parametry węzła → config `Pipeline` / `SlotVoter` (bez ROS) |
+| `ros_conversions` | `VotedSlot` → `vision_msgs/Detection3DArray` |
+| `perception_node` | cienki węzeł rclpy (sync, cv_bridge, TF, publikacja) |
 | `tools/` | nagranie → klatki → kalibracja → autolabel → trenowanie |
 
-Planowane (jeszcze nie w repo): węzeł ROS 2, `evaluate`, eksport TensorRT (`.engine` już obsługiwany w loaderze).
+Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuje ROS. Planowane: `evaluate`, FoundationPose, eksport TensorRT (`.engine` już obsługiwany w loaderze).
 
 ## Struktura repo
 
 ```text
 /ws
 ├── docker/Dockerfile              # ROS Humble + RealSense + OpenCV + rosbags + ultralytics
-├── docker/constraints.txt         # PIP_CONSTRAINT: numpy<2, opencv-python<4.12
+├── docker/constraints.txt         # PIP_CONSTRAINT: numpy<2, opencv-python<4.12, setuptools<80
 ├── .devcontainer/                 # /ws, /bags, sieć host, udev
 ├── src/g1_perception/             # pakiet ament_python
-│   ├── config/                    # rois.yaml, hsv.yaml (narzędzia), labels.yaml
+│   ├── config/                    # rois.yaml, hsv.yaml (narzędzia), labels.yaml, params.yaml
+│   ├── launch/perception.launch.py
 │   ├── g1_perception/
 │   │   ├── core/
 │   │   │   ├── types.py
 │   │   │   ├── dataset.py
 │   │   │   ├── config.py
 │   │   │   ├── labels.py
+│   │   │   ├── voting.py
+│   │   │   ├── frame_utils.py
+│   │   │   ├── debug_vis.py
 │   │   │   └── geometry.py
+│   │   ├── node_config.py
+│   │   ├── ros_conversions.py
+│   │   ├── perception_node.py     # entry point: perception_node
 │   │   ├── segmenters/
 │   │   │   ├── hsv.py             # @register("hsv")
 │   │   │   └── yolo_seg.py        # @register("yolo_seg")
@@ -102,6 +115,8 @@ Naprawa działającego kontenera bez przebudowy:
 pip3 install --user -c docker/constraints.txt "numpy<2" "opencv-python<4.12" "opencv-python-headless<4.12"
 ```
 
+Ten sam plik pinuje `setuptools<80`: od wersji 80 nie ma `setup.py develop`, więc `colcon build --symlink-install` kończy się `error: option --uninstall not recognized`. Naprawa: `pip3 install --user -c docker/constraints.txt "setuptools<80"`.
+
 ### Testy
 
 ```bash
@@ -113,6 +128,84 @@ colcon test-result --verbose
 ```
 
 Nie instaluj `pytest>=7` przez `pip --user` — gryzie się z pluginami ROS (`launch_testing`).
+
+---
+
+## Węzeł ROS 2 (`perception_node`)
+
+Synchronizuje kolor + głębię aligned + `camera_info` (`ApproximateTimeSynchronizer`), buduje `Frame` (RGB, głębia w metrach), uruchamia `Pipeline.process` i `SlotVoter`, publikuje wynik w `target_frame`. Przetwarzana jest najnowsza zsynchronizowana klatka, z częstotliwością `publish_rate_hz` (starsze klatki są pomijane).
+
+### Uruchomienie na bagu
+
+Terminal 1 — odtwarzanie w pętli:
+
+```bash
+source /opt/ros/humble/setup.bash
+ros2 bag play /bags/kostki_GRGR_mocne_20261015_184734 --loop
+```
+
+Terminal 2 — węzeł (z `cwd=/ws`, bo `model_path` w `params.yaml` jest względny):
+
+```bash
+cd /ws
+source /opt/ros/humble/setup.bash && source install/setup.bash
+ros2 launch g1_perception perception.launch.py
+# własne parametry (np. inne ROI):
+ros2 launch g1_perception perception.launch.py params_file:=/ścieżka/params.yaml
+# bez launch, z nadpisaniem pojedynczego parametru:
+ros2 run g1_perception perception_node --ros-args \
+  --params-file install/g1_perception/share/g1_perception/config/params.yaml \
+  -p rois_path:=/ścieżka/rois.yaml
+```
+
+Terminal 3 — podgląd:
+
+```bash
+ros2 topic echo /perception/cubes
+ros2 run rqt_image_view rqt_image_view /perception/debug_image
+```
+
+Uwagi:
+
+- `--loop` cofa znaczniki czasu na początku każdej pętli — zostaw `use_sim_time:=false` (domyślnie). `use_sim_time:=true` tylko z `ros2 bag play --clock` bez `--loop`.
+- `rois.yaml` musi pasować do kadru nagrania. ROI są w pikselach, więc wymagają stałej pozycji kamery względem stołu.
+- `params.yaml` jest instalowany do `share/g1_perception/config/`; po zmianie w `src/` z `--symlink-install` działa od razu.
+- Bez GPU (devcontainer na CPU) YOLO daje ~2–5 Hz; `publish_rate_hz` to górny limit.
+
+### Parametry (`config/params.yaml`)
+
+| Grupa | Parametry |
+|-------|-----------|
+| Wejście | `color_topic`, `depth_topic` (aligned, `16UC1` mm lub `32FC1` m), `camera_info_topic`, `sync_queue_size`, `sync_slop_s` |
+| Wyjście | `output_topic` (`/perception/cubes`), `debug_image_topic`, `mask_topic`, `target_frame` (`""` = ramka kamery), `tf_timeout_s` |
+| Pipeline | `segmenter` (`yolo_seg` \| `hsv`), `pose_estimator` (`geometric` \| `centroid`), `model_path`, `device`, `conf`, `verify_hsv`, `rois_path` / `hsv_path` / `labels_path` (`""` = domyślne z `config/`) |
+| Poza | `cube_size_m`, `margin_px`, `z_min_m`, `z_max_m` (≤ 0 wyłącza) |
+| Głosowanie | `vote_window`, `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`) |
+| Tempo | `publish_rate_hz` |
+
+### Kontrakt wiadomości
+
+**`/perception/cubes`** — `vision_msgs/Detection3DArray`, jedna `Detection3D` na każde ROI z `rois.yaml`, w kolejności slotów:
+
+| Pole | Wartość |
+|------|---------|
+| `header.stamp` | stempel obrazu kolorowego przetworzonej klatki |
+| `header.frame_id` | `target_frame`; ramka kamery (`camera_color_optical_frame`), gdy `target_frame` puste albo brak TF (wtedy warning w logu) |
+| `detections[i].header` | jak `header` |
+| `detections[i].id` | numer slotu jako string (`"0"`…`"3"`) |
+| `detections[i].results` | dokładnie 1 element |
+| `results[0].hypothesis.class_id` | `red` \| `green` \| `empty` \| `uncertain` (wynik głosowania) |
+| `results[0].hypothesis.score` | udział klatek w oknie zgodnych z wynikiem, [0, 1] |
+| `results[0].pose.pose` | poza kostki (środek, kwaternion xyzw; +Z = normalna stołu, yaw modulo 90°) |
+| `results[0].pose.covariance` | zera (nieużywane) |
+| `bbox.center` | jak `results[0].pose.pose` |
+| `bbox.size` | `cube_size_m` na każdej osi, gdy jest poza; `0`, gdy jej brak |
+
+Poza jest tylko dla `red` / `green`. Dla `empty`, `uncertain` albo koloru bez udanej estymacji pozy: `bbox.size = 0`, a pola pozy są zerowe (orientacja jednostkowa) i należy je ignorować.
+
+**`/perception/debug_image`** — `sensor_msgs/Image` `rgb8`, ramka kamery: ROI w kolorze wyniku głosowania, maski bieżącej klatki, opis `slot:etykieta score yaw`. Publikowany tylko, gdy ktoś subskrybuje.
+
+**`/perception/mask`** — `sensor_msgs/Image` `mono8`, ramka kamery: suma masek detekcji przypisanych do slotów w bieżącej klatce (0 / 255), wejście dla FoundationPose.
 
 ---
 
@@ -312,6 +405,22 @@ Reguły `process`:
 
 `from_config` ładuje ROI i mapę etykiet raz i przekazuje je etapom, których konstruktor przyjmuje `rois` / `label_map` (chyba że w `params` podano je jawnie albo `rois_path` / `labels_path`).
 
+### `core.voting`
+
+```python
+from g1_perception.core.voting import SlotVoter
+
+voter = SlotVoter(window=10, min_ratio=0.7)  # min_frames domyślnie = window
+for frame in frames:
+    voted = voter.update(pipe.process(frame))  # list[VotedSlot], po slot
+```
+
+Per slot w oknie ostatnich `window` klatek:
+
+- etykieta = większość; `uncertain`, gdy udział < `min_ratio`, remis, za mało klatek (< `min_frames`) albo wygrywa `uncertain`; klatki `uncertain` liczą się do mianownika;
+- dla `red` / `green`: pozycja = mediana per oś z klatek zgodnych z wynikiem; yaw = mediana z symetrią 90° (średnia kołowa `4·yaw` jako punkt odniesienia, odchyłki zawijane do ±45°, mediana); oś Z = średnia normalna stołu;
+- `VotedSlot`: `slot`, `label`, `score` (udział zwycięzcy), `n_frames`, `pose`, `yaw_deg` ∈ [0, 90), `yaw_consistency` ∈ [0, 1] (1 = zgodne kąty).
+
 ### Segmentery
 
 | Nazwa | Moduł | Zachowanie |
@@ -388,6 +497,11 @@ label_map:
 |------|--------|
 | `test_pipeline.py` | rejestr, `from_config`, 1 wynik/ROI (4 ROI + 2 detekcje YOLO → 2 kolory + 2 `empty`), `uncertain` |
 | `test_labels.py` | `canonical_label`, `load_label_map`, domyślny `labels.yaml` |
+| `test_voting.py` | `SlotVoter` (większość, `min_ratio`, remis, okno), mediana pozycji, yaw przez 0/90 |
+| `test_frame_utils.py` | głębia mm → m, `32FC1` NaN → 0, `K`, `transform_pose` |
+| `test_debug_vis.py` | suma masek mono8, obraz debug |
+| `test_node_config.py` | parametry węzła → config pipeline / voter, przebieg z HSV |
+| `test_ros_conversions.py` | kontrakt `Detection3DArray` (pomijany bez `vision_msgs`) |
 | `test_dataset.py` | `load_frame` |
 | `test_config.py` | ROI / HSV YAML |
 | `test_hsv_segmenter.py` | segmenter HSV (syntetyki) |

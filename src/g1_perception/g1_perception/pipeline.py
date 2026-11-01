@@ -74,6 +74,11 @@ class Pipeline:
         self._rois = sorted(rois, key=lambda r: r.slot)
         self._label_map = dict(label_map)
 
+    @property
+    def rois(self) -> list[Roi]:
+        """Return the ROIs reported by :meth:`process`, sorted by slot."""
+        return list(self._rois)
+
     @classmethod
     def from_config(
         cls,

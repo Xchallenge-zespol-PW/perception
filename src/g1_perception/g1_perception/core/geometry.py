@@ -164,20 +164,10 @@ def cube_pose_on_table(
     (c2x, c2y), (_w, _h), angle_deg = rect
 
     yaw_deg = float(angle_deg) % 90.0
-    yaw = np.deg2rad(yaw_deg)
 
     center_on_plane = origin + c2x * u + c2y * v
     position = center_on_plane + (size / 2.0) * n
-
-    x_axis = np.cos(yaw) * u + np.sin(yaw) * v
-    x_axis = x_axis / np.linalg.norm(x_axis)
-    z_axis = n / np.linalg.norm(n)
-    y_axis = np.cross(z_axis, x_axis)
-    y_axis = y_axis / np.linalg.norm(y_axis)
-    x_axis = np.cross(y_axis, z_axis)
-
-    R = np.column_stack((x_axis, y_axis, z_axis))
-    quat = rotation_matrix_to_quat_xyzw(R)
+    quat = quat_from_plane_yaw(n, yaw_deg)
 
     # Score: fraction of points close to the plane (relative consistency).
     dist = np.abs(pts @ n + d)
@@ -215,6 +205,52 @@ def plane_basis(
     u = u / np.linalg.norm(u)
     v = np.cross(n, u)
     return u, v
+
+
+def quat_from_plane_yaw(
+    n: NDArray[np.float64],
+    yaw_deg: float,
+) -> NDArray[np.float64]:
+    """
+    Quaternion ``(x, y, z, w)`` with +Z along ``n`` and X at ``yaw_deg``.
+
+    Yaw is measured in the :func:`plane_basis` of ``n`` (inverse of
+    :func:`yaw_on_plane_deg`).
+    """
+    u, v = plane_basis(n)
+    yaw = np.deg2rad(yaw_deg)
+    z_axis = np.asarray(n, dtype=np.float64)
+    z_axis = z_axis / np.linalg.norm(z_axis)
+    x_axis = np.cos(yaw) * u + np.sin(yaw) * v
+    x_axis = x_axis / np.linalg.norm(x_axis)
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis = y_axis / np.linalg.norm(y_axis)
+    x_axis = np.cross(y_axis, z_axis)
+    R = np.column_stack((x_axis, y_axis, z_axis))
+    return rotation_matrix_to_quat_xyzw(R)
+
+
+def transform_pose(
+    pose: Pose,
+    translation: NDArray[np.float64],
+    rotation_xyzw: NDArray[np.float64],
+) -> Pose:
+    """
+    Apply a rigid transform ``(translation, rotation)`` to ``pose``.
+
+    The transform maps source-frame coordinates to the target frame
+    (``p_target = R p_source + t``), as returned by a TF lookup of
+    ``target <- source``. ``score`` is kept.
+    """
+    R_t = quat_to_rotation_matrix(rotation_xyzw)
+    position = R_t @ np.asarray(pose.position, dtype=np.float64)
+    position = position + np.asarray(translation, dtype=np.float64)
+    R = R_t @ quat_to_rotation_matrix(pose.quat)
+    return Pose(
+        position=position,
+        quat=rotation_matrix_to_quat_xyzw(R),
+        score=pose.score,
+    )
 
 
 def rotation_matrix_to_quat_xyzw(

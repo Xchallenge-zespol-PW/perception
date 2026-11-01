@@ -1,0 +1,44 @@
+# Parameters for g1_perception/perception_node (defaults mirror node_config.DEFAULT_PARAMS).
+# Empty strings = package defaults (config/rois.yaml, hsv.yaml, labels.yaml; auto device).
+# Relative paths are resolved against the working directory of the launch.
+perception_node:
+  ros__parameters:
+    # Inputs (RealSense, aligned depth in 16UC1 mm)
+    color_topic: /camera/camera/color/image_raw
+    depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+    camera_info_topic: /camera/camera/color/camera_info
+    sync_queue_size: 10
+    sync_slop_s: 0.05
+
+    # Outputs
+    output_topic: /perception/cubes
+    debug_image_topic: /perception/debug_image
+    mask_topic: /perception/mask
+    # Frame for published poses; "" = camera optical frame. On G1 set the robot frame.
+    target_frame: camera_link
+    tf_timeout_s: 0.1
+
+    # Pipeline stages (names registered in segmenters/ and pose/)
+    segmenter: yolo_seg            # yolo_seg | hsv
+    pose_estimator: geometric      # geometric | centroid
+    model_path: runs/segment/runs/seg/cubes-2/weights/best.pt
+    device: ""                     # "" auto, "cpu", "0"
+    conf: 0.25
+    verify_hsv: false
+    rois_path: ""
+    hsv_path: ""
+    labels_path: ""
+
+    # Pose estimation
+    cube_size_m: 0.05
+    margin_px: 20
+    z_min_m: 0.1                   # <= 0 disables
+    z_max_m: 2.0                   # <= 0 disables
+
+    # Multi-frame voting
+    vote_window: 10
+    vote_min_ratio: 0.7
+    vote_min_frames: 0             # 0 = vote_window
+
+    # Processing / publishing rate
+    publish_rate_hz: 5.0
