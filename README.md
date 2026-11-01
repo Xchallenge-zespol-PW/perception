@@ -14,12 +14,16 @@ Frame (RGB + depth + K)
         │
         ▼
  PoseEstimator  →  Pose | None       # "centroid" | "geometric"
+        │
+        ▼
+ list[SlotResult]                    # dokładnie 1 na ROI: red | green | empty | uncertain
 ```
 
 | Warstwa | Co jest |
 |---------|---------|
-| `core.types` | `Frame`, `Detection`, `Pose`, protokoły |
-| `core.config` | ROI / HSV z YAML |
+| `core.types` | `Frame`, `Detection`, `Pose`, `SlotResult`, stałe etykiet, protokoły |
+| `core.config` | ROI / HSV / mapa etykiet z YAML |
+| `core.labels` | `canonical_label` (nazwa z modelu → etykieta kanoniczna) |
 | `core.dataset` | `load_frame` z `data/index.csv` |
 | `core.geometry` | deprojekcja, RANSAC płaszczyzny, poza kostki |
 | `pipeline` | `@register`, `Pipeline.from_config` / `process` |
@@ -37,12 +41,13 @@ Planowane (jeszcze nie w repo): węzeł ROS 2, `evaluate`, eksport TensorRT (`.e
 ├── docker/constraints.txt         # PIP_CONSTRAINT: numpy<2, opencv-python<4.12
 ├── .devcontainer/                 # /ws, /bags, sieć host, udev
 ├── src/g1_perception/             # pakiet ament_python
-│   ├── config/                    # rois.yaml, hsv.yaml (narzędzia)
+│   ├── config/                    # rois.yaml, hsv.yaml (narzędzia), labels.yaml
 │   ├── g1_perception/
 │   │   ├── core/
 │   │   │   ├── types.py
 │   │   │   ├── dataset.py
 │   │   │   ├── config.py
+│   │   │   ├── labels.py
 │   │   │   └── geometry.py
 │   │   ├── segmenters/
 │   │   │   ├── hsv.py             # @register("hsv")
@@ -237,10 +242,13 @@ Wagi: `runs/seg/cubes/weights/best.pt`.
 | Typ | Pola |
 |-----|------|
 | `Frame` | `rgb` HxWx3 uint8, `depth_m` HxW float32, `K` 3×3, `stamp` |
-| `Detection` | `slot`, `label`, `score`, `mask` HxW bool |
+| `Detection` | `slot`, `label` (surowa nazwa z segmentera), `score`, `mask` HxW bool |
 | `Pose` | `position` (3,), `quat` xyzw (4,), `score` |
+| `SlotResult` | `slot`, `label` (kanoniczna), `score`, `detection \| None`, `pose \| None` |
 | `Segmenter` | `segment(frame) -> list[Detection]` |
 | `PoseEstimator` | `estimate(frame, det) -> Pose \| None` |
+
+Etykiety kanoniczne (stałe): `LABEL_RED='red'`, `LABEL_GREEN='green'`, `LABEL_EMPTY='empty'`, `LABEL_UNCERTAIN='uncertain'`.
 
 ### `core.dataset`
 
@@ -252,9 +260,10 @@ frame = load_frame(row)  # wiersz z data/index.csv
 ### `core.config`
 
 ```python
-from g1_perception.core.config import load_rois, load_hsv
+from g1_perception.core.config import load_rois, load_hsv, load_label_map
 rois = load_rois()
 hsv = load_hsv()
+label_map = load_label_map()  # {'red cube': 'red', 'zielony': 'green', ...}
 ```
 
 ### `core.geometry`
@@ -274,6 +283,8 @@ import g1_perception.pose        # rejestruje centroid, geometric
 from g1_perception.pipeline import Pipeline
 
 pipe = Pipeline.from_config({
+    # opcjonalne; domyślnie config/rois.yaml i config/labels.yaml
+    # 'rois_path': '...', 'labels_path': '...',
     'segmenter': {
         'name': 'hsv',
         'params': {'min_frac': 0.05, 'erode': 1},
@@ -288,15 +299,25 @@ pipe = Pipeline.from_config({
 #     'model_path': 'runs/seg/cubes/weights/best.pt',
 #     'verify_hsv': True,
 # }}
-results = pipe.process(frame)  # list[(Detection, Pose|None)]
+results = pipe.process(frame)  # list[SlotResult], po jednym na ROI, posortowane po slot
 ```
+
+Reguły `process`:
+
+- dla każdego ROI z `rois.yaml` dokładnie jeden `SlotResult`;
+- brak detekcji w ROI → `empty` (`score=0`, `detection=None`);
+- kilka detekcji w jednym slocie → wygrywa najwyższy `score`; detekcje bez slotu są pomijane;
+- etykieta mapowana przez `labels.yaml`; nazwa spoza słownika → `uncertain`;
+- poza liczona tylko dla `red` / `green` (dla `empty` / `uncertain` `pose=None`).
+
+`from_config` ładuje ROI i mapę etykiet raz i przekazuje je etapom, których konstruktor przyjmuje `rois` / `label_map` (chyba że w `params` podano je jawnie albo `rois_path` / `labels_path`).
 
 ### Segmentery
 
 | Nazwa | Moduł | Zachowanie |
 |-------|-------|------------|
-| `hsv` | `segmenters/hsv.py` | Per ROI: maski HSV czerwony/zielony, erozja, odsetek ≥ `min_frac` → label; inaczej `nieznany` |
-| `yolo_seg` | `segmenters/yolo_seg.py` | YOLO-seg (`.pt`/`.engine`), `retina_masks=True`, slot gdy pokrycie maski z ROI > 50%; opcjonalnie `verify_hsv` |
+| `hsv` | `segmenters/hsv.py` | Per ROI: maski HSV red/green, erozja, odsetek ≥ `min_frac` → `red`/`green`; poniżej progu brak detekcji (→ `empty`) |
+| `yolo_seg` | `segmenters/yolo_seg.py` | YOLO-seg (`.pt`/`.engine`), `retina_masks=True`, slot gdy pokrycie maski z ROI > 50%; zachowuje nazwę klasy z modelu; opcjonalnie `verify_hsv` (niezgodność z HSV → `uncertain`) |
 
 Import `ultralytics` tylko wewnątrz `YoloSegSegmenter` (opcjonalna zależność).
 
@@ -347,13 +368,26 @@ red_high: {h_min: 170, h_max: 180, s_min: 80, s_max: 255, v_min: 50, v_max: 255}
 green:    {h_min: 40,  h_max: 90,  s_min: 40, s_max: 255, v_min: 40, v_max: 255}
 ```
 
+**`labels.yaml`** (w repo) — jedyne miejsce mapowania nazw klas z modeli na etykiety kanoniczne. Klucze bez rozróżniania wielkości liter; wartości tylko `red` / `green` / `empty` / `uncertain`. Nowy model z innymi nazwami klas = nowy wpis tutaj.
+
+```yaml
+label_map:
+  red cube: red
+  czerwona: red
+  green cube: green
+  zielony: green
+  brak: empty
+  nieznany: uncertain
+```
+
 ---
 
 ## Testy jednostkowe (mapa)
 
 | Plik | Zakres |
 |------|--------|
-| `test_pipeline.py` | rejestr, `from_config`, przepływ |
+| `test_pipeline.py` | rejestr, `from_config`, 1 wynik/ROI (4 ROI + 2 detekcje YOLO → 2 kolory + 2 `empty`), `uncertain` |
+| `test_labels.py` | `canonical_label`, `load_label_map`, domyślny `labels.yaml` |
 | `test_dataset.py` | `load_frame` |
 | `test_config.py` | ROI / HSV YAML |
 | `test_hsv_segmenter.py` | segmenter HSV (syntetyki) |

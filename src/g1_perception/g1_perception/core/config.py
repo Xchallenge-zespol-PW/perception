@@ -7,6 +7,9 @@ from pathlib import Path
 
 import yaml
 
+from g1_perception.core.labels import normalize_label_key
+from g1_perception.core.types import CANONICAL_LABELS
+
 
 @dataclass(frozen=True)
 class Roi:
@@ -147,6 +150,46 @@ def load_hsv(path: Path | None = None) -> HsvConfig:
         red_high=_range('red_high'),
         green=_range('green'),
     )
+
+
+def load_label_map(path: Path | None = None) -> dict[str, str]:
+    """
+    Load the raw-name → canonical-label dictionary from ``labels.yaml``.
+
+    Expected YAML::
+
+        label_map:
+          red cube: red
+          zielony: green
+
+    Keys are normalized with :func:`normalize_label_key`; values must be in
+    :data:`CANONICAL_LABELS`.
+    """
+    cfg_path = resolve_config_path('labels.yaml', path)
+    if not cfg_path.is_file():
+        raise FileNotFoundError(f'Missing {cfg_path}')
+    with cfg_path.open(encoding='utf-8') as f:
+        data = yaml.safe_load(f) or {}
+
+    raw = data.get('label_map', {})
+    if not isinstance(raw, dict):
+        raise ValueError(f'Invalid label_map in {cfg_path}')
+
+    label_map: dict[str, str] = {}
+    for name, target in raw.items():
+        key = normalize_label_key(name)
+        value = str(target).strip().lower()
+        if value not in CANONICAL_LABELS:
+            raise ValueError(
+                f'Invalid label {target!r} for {name!r} in {cfg_path}; '
+                f'expected one of {CANONICAL_LABELS}'
+            )
+        if key in label_map and label_map[key] != value:
+            raise ValueError(
+                f'Conflicting mapping for {name!r} in {cfg_path}'
+            )
+        label_map[key] = value
+    return label_map
 
 
 def save_rois(rois: list[Roi], path: Path | None = None) -> Path:

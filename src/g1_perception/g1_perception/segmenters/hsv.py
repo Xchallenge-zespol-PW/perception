@@ -14,12 +14,14 @@ from g1_perception.core.config import (
     load_hsv,
     load_rois,
 )
-from g1_perception.core.types import Detection, Frame
+from g1_perception.core.types import (
+    LABEL_GREEN,
+    LABEL_RED,
+    LABEL_UNCERTAIN,
+    Detection,
+    Frame,
+)
 from g1_perception.pipeline import register
-
-LABEL_RED = 'czerwony'
-LABEL_GREEN = 'zielony'
-LABEL_UNKNOWN = 'nieznany'
 
 
 def _in_range(hsv: np.ndarray, r: HsvRange) -> np.ndarray:
@@ -32,11 +34,13 @@ def _in_range(hsv: np.ndarray, r: HsvRange) -> np.ndarray:
 @register('hsv')
 class HsvSegmenter:
     """
-    Classify each ROI as red, green, or unknown from HSV pixel fractions.
+    Classify each ROI as red or green from HSV pixel fractions.
 
     For every ROI builds red (two hue wraps) and green masks, optionally
     erodes the ROI border, then picks the colour with the larger fraction
-    if it is at least ``min_frac``; otherwise the label is ``nieznany``.
+    if it is at least ``min_frac``; otherwise the ROI yields no detection
+    (reported as ``empty`` by the pipeline). A ROI with no pixels on the
+    image yields ``uncertain``.
     """
 
     def __init__(
@@ -72,7 +76,7 @@ class HsvSegmenter:
         self.erode = int(erode)
 
     def segment(self, frame: Frame) -> list[Detection]:
-        """Return one :class:`Detection` per configured ROI."""
+        """Return a :class:`Detection` for every ROI with a colour found."""
         h, w = frame.rgb.shape[:2]
         hsv_img = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2HSV)
 
@@ -81,9 +85,10 @@ class HsvSegmenter:
         )
         green = _in_range(hsv_img, self.hsv.green)
 
-        return [
+        detections = [
             self._classify_roi(roi, red, green, h, w) for roi in self.rois
         ]
+        return [det for det in detections if det is not None]
 
     def _classify_roi(
         self,
@@ -92,8 +97,8 @@ class HsvSegmenter:
         green: np.ndarray,
         h: int,
         w: int,
-    ) -> Detection:
-        """Classify a single ROI and build a full-frame boolean mask."""
+    ) -> Detection | None:
+        """Classify a single ROI; None when no colour reaches ``min_frac``."""
         roi_mask = np.zeros((h, w), dtype=np.uint8)
         y0 = max(roi.y0, 0)
         x0 = max(roi.x0, 0)
@@ -112,7 +117,7 @@ class HsvSegmenter:
         if area == 0:
             return Detection(
                 slot=roi.slot,
-                label=LABEL_UNKNOWN,
+                label=LABEL_UNCERTAIN,
                 score=0.0,
                 mask=np.zeros((h, w), dtype=bool),
             )
@@ -130,16 +135,12 @@ class HsvSegmenter:
             best_frac = green_frac
             best_pixels = inside & (green > 0)
 
-        if best_frac >= self.min_frac:
-            label = best_label
-            mask = best_pixels
-        else:
-            label = LABEL_UNKNOWN
-            mask = np.zeros((h, w), dtype=bool)
+        if best_frac < self.min_frac:
+            return None
 
         return Detection(
             slot=roi.slot,
-            label=label,
+            label=best_label,
             score=best_frac,
-            mask=mask,
+            mask=best_pixels,
         )

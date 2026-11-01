@@ -1,0 +1,13 @@
+# Raw class names from segmenters / models -> canonical slot label.
+# Canonical labels: red, green, empty, uncertain.
+# Keys are matched case-insensitively after trimming whitespace.
+# Names not listed here (and not canonical) become "uncertain".
+label_map:
+  red cube: red
+  czerwona: red
+  czerwony: red
+  green cube: green
+  zielona: green
+  zielony: green
+  brak: empty
+  nieznany: uncertain

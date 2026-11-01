@@ -6,14 +6,14 @@ import numpy as np
 import pytest
 
 from g1_perception.core.config import HsvConfig, HsvRange, Roi
-from g1_perception.core.types import Frame
-from g1_perception.pipeline import clear_registry, get_registered
-from g1_perception.segmenters.hsv import (
+from g1_perception.core.types import (
     LABEL_GREEN,
     LABEL_RED,
-    LABEL_UNKNOWN,
-    HsvSegmenter,
+    LABEL_UNCERTAIN,
+    Frame,
 )
+from g1_perception.pipeline import clear_registry, get_registered
+from g1_perception.segmenters.hsv import HsvSegmenter
 
 
 @pytest.fixture(autouse=True)
@@ -97,7 +97,7 @@ def test_green_square_in_roi():
     assert det.mask.any()
 
 
-def test_empty_roi_is_unknown():
+def test_empty_roi_yields_no_detection():
     roi = Roi(slot=1, x0=10, y0=10, x1=40, y1=40)
     # Gray image only — no saturated colour inside ROI.
     frame = _frame_with_square((128, 128, 128), square=(0, 0, 0, 0))
@@ -105,14 +105,10 @@ def test_empty_roi_is_unknown():
         rois=[roi], hsv=_loose_hsv(), min_frac=0.1, erode=0
     )
 
-    det = seg.segment(frame)[0]
-
-    assert det.label == LABEL_UNKNOWN
-    assert det.score < 0.1
-    assert not det.mask.any()
+    assert seg.segment(frame) == []
 
 
-def test_below_min_frac_is_unknown():
+def test_below_min_frac_yields_no_detection():
     roi = Roi(slot=0, x0=0, y0=0, x1=50, y1=50)
     # Tiny red speck inside a large ROI → fraction below threshold.
     frame = _frame_with_square((255, 0, 0), square=(20, 20, 22, 22))
@@ -120,10 +116,20 @@ def test_below_min_frac_is_unknown():
         rois=[roi], hsv=_loose_hsv(), min_frac=0.5, erode=0
     )
 
+    assert seg.segment(frame) == []
+
+
+def test_roi_outside_image_is_uncertain():
+    roi = Roi(slot=0, x0=500, y0=500, x1=520, y1=520)
+    frame = _frame_with_square((255, 0, 0), square=(0, 0, 10, 10))
+    seg = HsvSegmenter(
+        rois=[roi], hsv=_loose_hsv(), min_frac=0.1, erode=0
+    )
+
     det = seg.segment(frame)[0]
 
-    assert det.label == LABEL_UNKNOWN
-    assert det.score < 0.5
+    assert det.label == LABEL_UNCERTAIN
+    assert det.score == 0.0
     assert not det.mask.any()
 
 
@@ -170,9 +176,5 @@ def test_multiple_rois():
 
     dets = seg.segment(frame)
 
-    assert [d.label for d in dets] == [
-        LABEL_RED,
-        LABEL_GREEN,
-        LABEL_UNKNOWN,
-    ]
-    assert [d.slot for d in dets] == [0, 1, 2]
+    assert [d.label for d in dets] == [LABEL_RED, LABEL_GREEN]
+    assert [d.slot for d in dets] == [0, 1]

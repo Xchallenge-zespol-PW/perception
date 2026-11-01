@@ -6,15 +6,20 @@ import numpy as np
 import pytest
 
 from g1_perception.core.config import HsvConfig, HsvRange, Roi
-from g1_perception.core.types import Frame
+from g1_perception.core.types import (
+    LABEL_GREEN,
+    LABEL_RED,
+    LABEL_UNCERTAIN,
+    Frame,
+)
 from g1_perception.pipeline import clear_registry, get_registered, register
-from g1_perception.segmenters.hsv import LABEL_RED, LABEL_UNKNOWN
 from g1_perception.segmenters.yolo_seg import (
     YoloSegSegmenter,
     best_slot_for_mask,
-    color_family,
     hsv_color_in_mask,
 )
+
+LABEL_MAP = {'czerwona': LABEL_RED, 'zielona': LABEL_GREEN}
 
 
 @pytest.fixture(autouse=True)
@@ -35,14 +40,6 @@ def _loose_hsv() -> HsvConfig:
 
 def test_register_yolo_seg_name():
     assert get_registered('yolo_seg') is YoloSegSegmenter
-
-
-def test_color_family_accepts_feminine_and_masculine():
-    assert color_family('czerwona') == 'red'
-    assert color_family('czerwony') == 'red'
-    assert color_family('zielona') == 'green'
-    assert color_family('zielony') == 'green'
-    assert color_family('nieznany') is None
 
 
 def test_best_slot_requires_over_50_percent_overlap():
@@ -75,7 +72,7 @@ def test_hsv_color_in_mask_red():
 
 
 def test_verify_hsv_downgrades_mismatched_label(tmp_path):
-    """Segment with a fake YOLO model: green class on a red square → nieznany."""
+    """Segment with a fake YOLO model: green class on a red square → uncertain."""
     rois = [Roi(slot=0, x0=5, y0=5, x1=35, y1=35)]
     h, w = 40, 40
     rgb = np.full((h, w, 3), 128, dtype=np.uint8)
@@ -108,6 +105,7 @@ def test_verify_hsv_downgrades_mismatched_label(tmp_path):
         rois=rois,
         verify_hsv=True,
         hsv=_loose_hsv(),
+        label_map=LABEL_MAP,
         min_overlap=0.5,
     )
     seg._model = _FakeModel()
@@ -121,7 +119,7 @@ def test_verify_hsv_downgrades_mismatched_label(tmp_path):
     dets = seg.segment(frame)
     assert len(dets) == 1
     assert dets[0].slot == 0
-    assert dets[0].label == LABEL_UNKNOWN
+    assert dets[0].label == LABEL_UNCERTAIN
     assert dets[0].score == pytest.approx(0.9)
 
 

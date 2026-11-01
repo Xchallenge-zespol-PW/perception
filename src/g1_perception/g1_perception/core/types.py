@@ -8,6 +8,14 @@ from typing import Protocol
 import numpy as np
 from numpy.typing import NDArray
 
+LABEL_RED = 'red'
+LABEL_GREEN = 'green'
+LABEL_EMPTY = 'empty'
+LABEL_UNCERTAIN = 'uncertain'
+
+CANONICAL_LABELS = (LABEL_RED, LABEL_GREEN, LABEL_EMPTY, LABEL_UNCERTAIN)
+COLOR_LABELS = (LABEL_RED, LABEL_GREEN)
+
 
 @dataclass(frozen=True)
 class Frame:
@@ -29,8 +37,10 @@ class Detection:
     """
     A segmented object proposal on a frame.
 
-    ``slot`` is a known table index or None, ``label`` is the class name,
-    ``score`` is confidence in [0, 1], ``mask`` is an HxW bool array.
+    ``slot`` is a known table index or None, ``label`` is the raw class name
+    as produced by the segmenter (mapped to a canonical label by the
+    pipeline), ``score`` is confidence in [0, 1], ``mask`` is an HxW bool
+    array.
     """
 
     slot: int | None
@@ -51,6 +61,24 @@ class Pose:
     position: NDArray[np.float64]
     quat: NDArray[np.float64]
     score: float
+
+
+@dataclass(frozen=True)
+class SlotResult:
+    """
+    Pipeline output for one configured table slot.
+
+    ``label`` is one of :data:`CANONICAL_LABELS`. ``score`` is the
+    confidence of the chosen detection (0 when nothing was detected).
+    ``detection`` is None for ``empty`` slots without a detection; ``pose``
+    is set only for ``red`` / ``green`` when estimation succeeded.
+    """
+
+    slot: int
+    label: str
+    score: float
+    detection: Detection | None
+    pose: Pose | None
 
 
 class Segmenter(Protocol):

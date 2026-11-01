@@ -2,36 +2,31 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from g1_perception.core.config import HsvConfig, HsvRange, Roi, load_hsv, load_rois
-from g1_perception.core.types import Detection, Frame
-from g1_perception.pipeline import register
-from g1_perception.segmenters.hsv import (
+from g1_perception.core.config import (
+    HsvConfig,
+    Roi,
+    load_hsv,
+    load_label_map,
+    load_rois,
+)
+from g1_perception.core.labels import canonical_label
+from g1_perception.core.types import (
     LABEL_GREEN,
     LABEL_RED,
-    LABEL_UNKNOWN,
-    _in_range,
+    LABEL_UNCERTAIN,
+    Detection,
+    Frame,
 )
+from g1_perception.pipeline import register
+from g1_perception.segmenters.hsv import _in_range
 
 DEFAULT_MIN_OVERLAP = 0.5
-
-
-def color_family(label: str) -> str | None:
-    """
-    Map a class / HSV label to ``'red'`` / ``'green'``, or ``None``.
-
-    Accepts both ``czerwona``/``czerwony`` and ``zielona``/``zielony``.
-    """
-    lower = label.strip().lower()
-    if lower.startswith('czerwon'):
-        return 'red'
-    if lower.startswith('zielon'):
-        return 'green'
-    return None
 
 
 def best_slot_for_mask(
@@ -74,9 +69,9 @@ def hsv_color_in_mask(
     hsv: HsvConfig,
     min_frac: float = 0.05,
 ) -> str:
-    """Return majority HSV colour in ``mask`` (czerwony / zielony / nieznany)."""
+    """Return majority HSV colour in ``mask`` (red / green / uncertain)."""
     if not np.any(mask):
-        return LABEL_UNKNOWN
+        return LABEL_UNCERTAIN
 
     hsv_img = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
     red = _in_range(hsv_img, hsv.red_low) | _in_range(hsv_img, hsv.red_high)
@@ -90,7 +85,7 @@ def hsv_color_in_mask(
         return LABEL_RED
     if green_frac > red_frac and green_frac >= min_frac:
         return LABEL_GREEN
-    return LABEL_UNKNOWN
+    return LABEL_UNCERTAIN
 
 
 @register('yolo_seg')
@@ -99,7 +94,10 @@ class YoloSegSegmenter:
     Run a YOLO-seg model and map instance masks onto ROI slots.
 
     ``ultralytics`` is imported lazily when the model is first loaded so the
-    rest of the package stays usable without that dependency.
+    rest of the package stays usable without that dependency. Detections
+    keep the model's class name; with ``verify_hsv`` a class whose canonical
+    label (via ``label_map``) disagrees with the HSV colour becomes
+    ``uncertain``.
     """
 
     def __init__(
@@ -115,6 +113,8 @@ class YoloSegSegmenter:
         hsv: HsvConfig | None = None,
         hsv_path: str | Path | None = None,
         hsv_min_frac: float = 0.05,
+        label_map: Mapping[str, str] | None = None,
+        labels_path: str | Path | None = None,
         device: str | None = None,
     ) -> None:
         self.model_path = Path(model_path)
@@ -149,6 +149,14 @@ class YoloSegSegmenter:
         else:
             self.hsv = hsv
 
+        self.label_map: dict[str, str] | None
+        if verify_hsv and label_map is None:
+            self.label_map = load_label_map(
+                Path(labels_path) if labels_path is not None else None
+            )
+        else:
+            self.label_map = dict(label_map) if label_map is not None else None
+
     def _ensure_model(self):
         """Lazy-load Ultralytics YOLO (``.pt`` or ``.engine``)."""
         if self._model is not None:
@@ -170,7 +178,7 @@ class YoloSegSegmenter:
         Predict instance masks and return one Detection per filled slot.
 
         When several instances map to the same slot, the highest-confidence
-        one is kept. With ``verify_hsv``, mismatched colour → ``nieznany``.
+        one is kept. With ``verify_hsv``, mismatched colour → ``uncertain``.
         """
         model = self._ensure_model()
         h, w = frame.rgb.shape[:2]
@@ -230,8 +238,9 @@ class YoloSegSegmenter:
                 hsv_label = hsv_color_in_mask(
                     frame.rgb, mask, self.hsv, self.hsv_min_frac
                 )
-                if color_family(label) != color_family(hsv_label):
-                    label = LABEL_UNKNOWN
+                model_label = canonical_label(label, self.label_map or {})
+                if model_label != hsv_label:
+                    label = LABEL_UNCERTAIN
 
             prev = best.get(slot)
             if prev is None or score > prev[0]:
