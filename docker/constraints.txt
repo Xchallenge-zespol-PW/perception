@@ -1,0 +1,6 @@
+# Global pip constraints (PIP_CONSTRAINT), also applied to `pip install --user`.
+# ROS 2 Humble's cv_bridge is compiled against NumPy 1.x; NumPy 2 breaks it at import.
+# opencv-python >= 4.12 requires NumPy 2, so it is capped as well.
+numpy<2
+opencv-python<4.12
+opencv-python-headless<4.12

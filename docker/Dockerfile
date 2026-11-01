@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
  && rm -rf /var/lib/apt/lists/*
 
+COPY constraints.txt /etc/pip/constraints.txt
+ENV PIP_CONSTRAINT=/etc/pip/constraints.txt
+
 RUN pip3 install --no-cache-dir rosbags
 
 RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc
@@ -19,7 +22,8 @@ WORKDIR /ws
 CMD ["bash"]
 
 RUN apt-get update && apt-get install -y nano sudo ros-humble-vision-msgs && rm -rf /var/lib/apt/lists/*
-RUN pip3 install --no-cache-dir "numpy<2"
+RUN pip3 install --no-cache-dir "numpy<2" "opencv-python<4.12" ultralytics
+RUN bash -c "source /opt/ros/humble/setup.bash && python3 -c \"import numpy, cv2; from cv_bridge import CvBridge; assert numpy.__version__.startswith('1'), numpy.__version__\""
 
 ARG USERNAME=dev
 RUN useradd --uid 1000 -m -s /bin/bash $USERNAME \

@@ -33,7 +33,8 @@ Planowane (jeszcze nie w repo): węzeł ROS 2, `evaluate`, eksport TensorRT (`.e
 
 ```text
 /ws
-├── docker/Dockerfile              # ROS Humble + RealSense + OpenCV + rosbags
+├── docker/Dockerfile              # ROS Humble + RealSense + OpenCV + rosbags + ultralytics
+├── docker/constraints.txt         # PIP_CONSTRAINT: numpy<2, opencv-python<4.12
 ├── .devcontainer/                 # /ws, /bags, sieć host, udev
 ├── src/g1_perception/             # pakiet ament_python
 │   ├── config/                    # rois.yaml, hsv.yaml (narzędzia)
@@ -73,6 +74,27 @@ Poza repo (bind mount): `/bags/` — MCAP + `labels.csv`.
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-select g1_perception
 source install/setup.bash
+```
+
+### NumPy < 2 (wymóg `cv_bridge`)
+
+`cv_bridge` z ROS 2 Humble (apt) jest skompilowany pod NumPy 1.x. Z NumPy 2 import kończy się błędem `AttributeError: _ARRAY_API not found` („A module that was compiled using NumPy 1.x cannot be run in NumPy 2…”), więc węzeł ROS nie wystartuje. Typowa przyczyna: `pip install ultralytics` (np. `--user`) bez ograniczeń dociąga najnowszy `numpy` 2.x i `opencv-python` ≥ 4.12 (które samo wymaga NumPy 2); pakiety w `~/.local` przesłaniają wtedy wersje z obrazu.
+
+Zabezpieczenie w obrazie:
+
+- `docker/constraints.txt` (`numpy<2`, `opencv-python<4.12`, `opencv-python-headless<4.12`) jest kopiowany do `/etc/pip/constraints.txt` i ustawiony jako `PIP_CONSTRAINT`, więc obowiązuje każde `pip install` w kontenerze, także `--user`.
+- `ultralytics` jest instalowany w obrazie już z tymi ograniczeniami.
+- Build kończy się krokiem weryfikacji (failuje, jeśli NumPy ≥ 2 albo `cv_bridge` się nie importuje):
+
+```bash
+source /opt/ros/humble/setup.bash
+python3 -c "import numpy, cv2; from cv_bridge import CvBridge; assert numpy.__version__.startswith('1')"
+```
+
+Naprawa działającego kontenera bez przebudowy:
+
+```bash
+pip3 install --user -c docker/constraints.txt "numpy<2" "opencv-python<4.12" "opencv-python-headless<4.12"
 ```
 
 ### Testy
@@ -196,8 +218,9 @@ Wyjście: `datasets/cubes_seg/{images,labels}/{train,val}/`, `data.yaml`, opcjon
 
 ### `train_yolo.py` — trening Ultralytics
 
+`ultralytics` jest w obrazie (z ograniczeniem `numpy<2`, patrz wyżej).
+
 ```bash
-pip install ultralytics
 python3 tools/train_yolo.py
 python3 tools/train_yolo.py --epochs 100 --device 0 --batch 8 \
   --data datasets/cubes_seg/data.yaml --model yolo11n-seg.pt
