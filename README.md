@@ -25,11 +25,13 @@ Frame (RGB + depth + K)
 | `core.config` | ROI / HSV / mapa etykiet z YAML |
 | `core.labels` | `canonical_label` (nazwa z modelu → etykieta kanoniczna) |
 | `core.voting` | `SlotVoter`: głosowanie po oknie N klatek per slot |
+| `core.tracker` | śledzenie 3D (najbliższy sąsiad) + głosowanie per track |
+| `core.slot_assign` | numery miejsc 1..N wzdłuż osi + walidacja linii/odstępów |
 | `core.dataset` | `load_frame` z `data/index.csv` |
 | `core.geometry` | deprojekcja, RANSAC płaszczyzny, poza kostki, `transform_pose` |
 | `core.frame_utils` | głębia mm → m, `K` z `camera_info` |
-| `core.debug_vis` | obraz debug (ROI, maski, etykiety, yaw), suma masek mono8 |
-| `pipeline` | `@register`, `Pipeline.from_config` / `process` |
+| `core.debug_vis` | obraz debug (ROI / id tracka, maski, etykiety, yaw), suma masek mono8 |
+| `pipeline` | `@register`, `Pipeline.from_config` / `process` (`rois_mode`) |
 | `segmenters/` | `hsv`, `yolo_seg` |
 | `pose/` | `centroid`, `geometric` |
 | `node_config` | parametry węzła → config `Pipeline` / `SlotVoter` (bez ROS) |
@@ -187,23 +189,29 @@ ros2 launch g1_perception perception.launch.py config:=params_laptop.yaml
 |-------|-----------|
 | Wejście | `color_topic`, `depth_topic` (aligned, `16UC1` mm lub `32FC1` m), `camera_info_topic`, `sync_queue_size`, `sync_slop_s` |
 | Wyjście | `output_topic` (`/perception/cubes`), `debug_image_topic`, `mask_topic`, `target_frame` (`""` = ramka kamery), `tf_timeout_s` |
-| Pipeline | `segmenter` (`yolo_seg` \| `hsv`), `pose_estimator` (`geometric` \| `centroid`), `model_path`, `device`, `conf`, `verify_hsv`, `rois_path` / `hsv_path` / `labels_path` (`""` = domyślne z `config/`) |
+| Pipeline | `segmenter` (`yolo_seg` \| `hsv`), `pose_estimator` (`geometric` \| `centroid`), `model_path`, `device`, `conf`, `verify_hsv`, `rois_mode` (`none` \| `image_roi`), `rois_path` / `hsv_path` / `labels_path` (`""` = domyślne; w `none` brak pliku ROI nie jest błędem) |
 | Poza | `cube_size_m`, `margin_px`, `z_min_m`, `z_max_m` (≤ 0 wyłącza) |
-| Głosowanie | `vote_window`, `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`) |
+| Głosowanie / tracking | `vote_window`, `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`), `match_dist_m`, `max_missed` |
+| Miejsca (`rois_mode=none`) | `slot_axis` (`y` = L→P na robocie), `expected_count`, `max_line_deviation_m`, `min_spacing_m`, `max_spacing_m` |
 | Tempo | `publish_rate_hz` |
+
+`params_robot.yaml` używa `rois_mode: none` (YOLO → tracker 3D → TF → numery miejsc). `params_laptop.yaml` domyślnie `image_roi`.
 
 ### Kontrakt wiadomości
 
-**`/perception/cubes`** — `vision_msgs/Detection3DArray`, jedna `Detection3D` na każde ROI z `rois.yaml`, w kolejności slotów:
+**`/perception/cubes`** — `vision_msgs/Detection3DArray`:
+
+- **`rois_mode=image_roi`**: jedna `Detection3D` na każde ROI, w kolejności slotów (`id` = `"0"`…).
+- **`rois_mode=none`**: jedna `Detection3D` na śledzoną kostkę. Po udanej walidacji `id` = numer miejsca `"1"`…`"N"` (sort wzdłuż `slot_axis` w `target_frame`). Gdy walidacja nie przejdzie: `id` = id trackera, `class_id=uncertain`, w logu ostrzeżenie.
 
 | Pole | Wartość |
 |------|---------|
 | `header.stamp` | stempel obrazu kolorowego przetworzonej klatki |
-| `header.frame_id` | `target_frame`; ramka kamery (`camera_color_optical_frame`), gdy `target_frame` puste albo brak TF (wtedy warning w logu) |
+| `header.frame_id` | `target_frame`; ramka kamery, gdy `target_frame` puste albo brak TF (warning w logu) |
 | `detections[i].header` | jak `header` |
-| `detections[i].id` | numer slotu jako string (`"0"`…`"3"`) |
+| `detections[i].id` | numer miejsca / slotu albo id śledzenia (gdy assignment nie przeszedł) |
 | `detections[i].results` | dokładnie 1 element |
-| `results[0].hypothesis.class_id` | `red` \| `green` \| `empty` \| `uncertain` (wynik głosowania) |
+| `results[0].hypothesis.class_id` | `red` \| `green` \| `empty` \| `uncertain` |
 | `results[0].hypothesis.score` | udział klatek w oknie zgodnych z wynikiem, [0, 1] |
 | `results[0].pose.pose` | poza kostki (środek, kwaternion xyzw; +Z = normalna stołu, yaw modulo 90°) |
 | `results[0].pose.covariance` | zera (nieużywane) |
@@ -212,9 +220,9 @@ ros2 launch g1_perception perception.launch.py config:=params_laptop.yaml
 
 Poza jest tylko dla `red` / `green`. Dla `empty`, `uncertain` albo koloru bez udanej estymacji pozy: `bbox.size = 0`, a pola pozy są zerowe (orientacja jednostkowa) i należy je ignorować.
 
-**`/perception/debug_image`** — `sensor_msgs/Image` `rgb8`, ramka kamery: ROI, maski, `slot:etykieta score yaw`, czas inferencji w ms (lewy górny róg). Publikowany tylko, gdy ktoś subskrybuje.
+**`/perception/debug_image`** — `sensor_msgs/Image` `rgb8`, ramka kamery: ROI (gdy są), maski, `id:etykieta status` (+ yaw), czas inferencji w ms. Publikowany tylko, gdy ktoś subskrybuje.
 
-**`/perception/mask`** — `sensor_msgs/Image` `mono8`, ramka kamery: suma masek detekcji przypisanych do slotów w bieżącej klatce (0 / 255).
+**`/perception/mask`** — `sensor_msgs/Image` `mono8`, ramka kamery: suma masek detekcji w bieżącej klatce (0 / 255).
 
 ---
 

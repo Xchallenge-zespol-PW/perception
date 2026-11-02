@@ -105,6 +105,24 @@ def fit_plane_ransac(
     return n, d, n_inliers
 
 
+def roi_from_mask(
+    mask: NDArray[np.bool_],
+    *,
+    slot: int = -1,
+) -> Roi:
+    """Return the axis-aligned bbox of ``mask`` as an :class:`Roi`."""
+    ys, xs = np.where(mask)
+    if ys.size == 0:
+        raise ValueError('Cannot build ROI from an empty mask')
+    return Roi(
+        slot=int(slot),
+        x0=int(xs.min()),
+        y0=int(ys.min()),
+        x1=int(xs.max()) + 1,
+        y1=int(ys.max()) + 1,
+    )
+
+
 def table_plane_around(
     roi: Roi,
     mask: NDArray[np.bool_],

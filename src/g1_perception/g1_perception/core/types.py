@@ -66,15 +66,17 @@ class Pose:
 @dataclass(frozen=True)
 class SlotResult:
     """
-    Pipeline output for one configured table slot.
+    Pipeline output for one table slot or free detection.
 
-    ``label`` is one of :data:`CANONICAL_LABELS`. ``score`` is the
-    confidence of the chosen detection (0 when nothing was detected).
-    ``detection`` is None for ``empty`` slots without a detection; ``pose``
-    is set only for ``red`` / ``green`` when estimation succeeded.
+    ``slot`` is the ROI index, or ``None`` when ``rois_mode=none`` (free
+    detections before tracking / place assignment). ``label`` is one of
+    :data:`CANONICAL_LABELS`. ``score`` is the confidence of the chosen
+    detection (0 when nothing was detected). ``detection`` is None for
+    ``empty`` slots without a detection; ``pose`` is set only for
+    ``red`` / ``green`` when estimation succeeded.
     """
 
-    slot: int
+    slot: int | None
     label: str
     score: float
     detection: Detection | None

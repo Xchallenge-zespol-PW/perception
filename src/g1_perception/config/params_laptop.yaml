@@ -26,6 +26,7 @@ perception_node:
     device: ""
     conf: 0.25
     verify_hsv: false
+    rois_mode: image_roi
     rois_path: ""
     hsv_path: ""
     labels_path: ""
@@ -36,9 +37,16 @@ perception_node:
     z_min_m: 0.1
     z_max_m: 2.0
 
-    # Multi-frame voting
+    # Multi-frame voting / tracking (used when rois_mode=none)
     vote_window: 10
     vote_min_ratio: 0.7
     vote_min_frames: 0
+    match_dist_m: 0.03
+    max_missed: 5
+    slot_axis: y
+    expected_count: 4
+    max_line_deviation_m: 0.03
+    min_spacing_m: 0.04
+    max_spacing_m: 0.20
 
     publish_rate_hz: 5.0

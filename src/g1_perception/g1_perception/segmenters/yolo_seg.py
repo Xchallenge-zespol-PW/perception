@@ -118,7 +118,9 @@ class YoloSegSegmenter:
         device: str | None = None,
     ) -> None:
         self.model_path = Path(model_path)
-        if rois is None:
+        if rois is None and rois_path is None:
+            self.rois = []
+        elif rois is None:
             self.rois = load_rois(
                 Path(rois_path) if rois_path is not None else None
             )
@@ -219,15 +221,14 @@ class YoloSegSegmenter:
         if clss_np.size == 0:
             return []
 
-        # Best detection per slot: slot -> (score, label, mask)
+        free = not self.rois
+        # Best detection per slot (ROI mode), or every instance (free mode).
         best: dict[int, tuple[float, str, np.ndarray]] = {}
+        free_dets: list[Detection] = []
 
         for i in range(len(clss_np)):
             mask = self._mask_to_full(masks[i], h, w)
             if not np.any(mask):
-                continue
-            slot = best_slot_for_mask(mask, self.rois, self.min_overlap)
-            if slot is None:
                 continue
 
             class_id = int(clss_np[i])
@@ -242,10 +243,23 @@ class YoloSegSegmenter:
                 if model_label != hsv_label:
                     label = LABEL_UNCERTAIN
 
+            if free:
+                free_dets.append(
+                    Detection(
+                        slot=None, label=label, score=score, mask=mask
+                    )
+                )
+                continue
+
+            slot = best_slot_for_mask(mask, self.rois, self.min_overlap)
+            if slot is None:
+                continue
             prev = best.get(slot)
             if prev is None or score > prev[0]:
                 best[slot] = (score, label, mask)
 
+        if free:
+            return free_dets
         return [
             Detection(
                 slot=slot,

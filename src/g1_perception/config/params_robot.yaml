@@ -27,6 +27,8 @@ perception_node:
     device: cpu
     conf: 0.25
     verify_hsv: false
+    # Free detections + 3D tracker + place assignment (no image ROIs).
+    rois_mode: none
     rois_path: ""
     hsv_path: ""
     labels_path: ""
@@ -37,9 +39,16 @@ perception_node:
     z_min_m: 0.1
     z_max_m: 2.0
 
-    # Multi-frame voting (~124 ms/frame ONNX → keep publish rate modest)
+    # Multi-frame voting / tracking (~124 ms/frame ONNX)
     vote_window: 10
     vote_min_ratio: 0.7
     vote_min_frames: 0
+    match_dist_m: 0.03
+    max_missed: 5
+    slot_axis: y
+    expected_count: 4
+    max_line_deviation_m: 0.03
+    min_spacing_m: 0.04
+    max_spacing_m: 0.20
 
     publish_rate_hz: 5.0

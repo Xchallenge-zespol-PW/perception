@@ -21,6 +21,10 @@ from g1_perception.core.types import (
 
 _REGISTRY: dict[str, type] = {}
 
+ROIS_MODE_NONE = 'none'
+ROIS_MODE_IMAGE = 'image_roi'
+ROIS_MODES = (ROIS_MODE_NONE, ROIS_MODE_IMAGE)
+
 
 def register(name: str):
     """
@@ -56,10 +60,11 @@ def clear_registry() -> None:
 
 class Pipeline:
     """
-    Run segmentation, then pose estimation, and report every ROI slot.
+    Run segmentation, then pose estimation.
 
-    :meth:`process` returns exactly one :class:`SlotResult` per ROI, sorted
-    by slot: no detection → ``empty``, unmapped label → ``uncertain``.
+    With ROIs (``rois_mode=image_roi``): one :class:`SlotResult` per ROI.
+    Without ROIs (``rois_mode=none``): one result per YOLO detection
+    (``slot=None``) with geometric pose when the label is a colour.
     """
 
     def __init__(
@@ -68,16 +73,29 @@ class Pipeline:
         pose_estimator: PoseEstimator,
         rois: Sequence[Roi],
         label_map: Mapping[str, str],
+        *,
+        rois_mode: str = ROIS_MODE_IMAGE,
     ) -> None:
+        mode = str(rois_mode).strip().lower()
+        if mode not in ROIS_MODES:
+            raise ValueError(
+                f'rois_mode must be one of {ROIS_MODES}, got {rois_mode!r}'
+            )
         self._segmenter = segmenter
         self._pose_estimator = pose_estimator
         self._rois = sorted(rois, key=lambda r: r.slot)
         self._label_map = dict(label_map)
+        self._rois_mode = mode
 
     @property
     def rois(self) -> list[Roi]:
-        """Return the ROIs reported by :meth:`process`, sorted by slot."""
+        """Return configured ROIs (empty when ``rois_mode=none``)."""
         return list(self._rois)
+
+    @property
+    def rois_mode(self) -> str:
+        """Return ``none`` or ``image_roi``."""
+        return self._rois_mode
 
     @classmethod
     def from_config(
@@ -93,21 +111,33 @@ class Pipeline:
         Expected shape::
 
             {
-                "rois_path": "...",      # optional, default config/rois.yaml
+                "rois_mode": "none" | "image_roi",  # default image_roi
+                "rois_path": "...",      # optional; ignored when mode=none
                 "labels_path": "...",    # optional, default config/labels.yaml
                 "segmenter": {"name": "...", "params": {...}},
                 "pose_estimator": {"name": "...", "params": {...}},
             }
 
-        ``params`` is optional and defaults to an empty dict. Each ``name``
-        must refer to a class previously registered with :func:`register`.
-        ``rois`` / ``label_map`` arguments override the YAML files. Stages
-        whose constructor accepts ``rois`` / ``label_map`` receive the
-        pipeline's values unless their params set them (or the matching
-        ``rois_path`` / ``labels_path``) explicitly.
+        In ``none`` mode missing ``rois.yaml`` is not an error (rois=[]).
         """
+        rois_mode = str(
+            config.get('rois_mode', ROIS_MODE_IMAGE)
+        ).strip().lower()
+        if rois_mode not in ROIS_MODES:
+            raise ValueError(
+                f'rois_mode must be one of {ROIS_MODES}, got {rois_mode!r}'
+            )
+
         if rois is None:
-            rois = load_rois(_optional_path(config.get('rois_path')))
+            if rois_mode == ROIS_MODE_NONE:
+                rois = []
+            else:
+                rois_path = _optional_path(config.get('rois_path'))
+                if rois_path is None:
+                    # empty path → package default; still required in image_roi
+                    rois = load_rois(None)
+                else:
+                    rois = load_rois(rois_path)
         if label_map is None:
             label_map = load_label_map(
                 _optional_path(config.get('labels_path'))
@@ -124,23 +154,44 @@ class Pipeline:
             pose_estimator=pose_estimator,
             rois=rois,
             label_map=label_map,
+            rois_mode=rois_mode,
         )
 
     def process(self, frame: Frame) -> list[SlotResult]:
-        """Segment ``frame`` and return one result per configured ROI."""
-        best = _best_detection_per_slot(self._segmenter.segment(frame))
+        """Segment ``frame`` and return slot or free-detection results."""
+        detections = self._segmenter.segment(frame)
+        if self._rois_mode == ROIS_MODE_NONE or not self._rois:
+            return self._resolve_free(frame, detections)
+        best = _best_detection_per_slot(detections)
         return [
             self._resolve_slot(frame, roi.slot, best.get(roi.slot))
             for roi in self._rois
         ]
 
+    def _resolve_free(
+        self,
+        frame: Frame,
+        detections: Sequence[Detection],
+    ) -> list[SlotResult]:
+        """One result per detection; ``slot=None``; pose for colour labels."""
+        results: list[SlotResult] = []
+        for det in detections:
+            free = Detection(
+                slot=None,
+                label=det.label,
+                score=det.score,
+                mask=det.mask,
+            )
+            results.append(self._resolve_slot(frame, None, free))
+        return results
+
     def _resolve_slot(
         self,
         frame: Frame,
-        slot: int,
+        slot: int | None,
         det: Detection | None,
     ) -> SlotResult:
-        """Map the slot's detection to a canonical label and pose."""
+        """Map a detection to a canonical label and pose."""
         if det is None:
             return SlotResult(
                 slot=slot,

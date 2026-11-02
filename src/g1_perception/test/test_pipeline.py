@@ -69,8 +69,9 @@ class RecordingPoseEstimator:
         self.calls.append(det.slot)
         if self.fail:
             return None
+        z = 0.0 if det.slot is None else float(det.slot)
         return Pose(
-            position=np.array([0.0, 0.0, float(det.slot)], dtype=np.float64),
+            position=np.array([0.0, 0.0, z], dtype=np.float64),
             quat=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64),
             score=0.8,
         )
@@ -337,3 +338,49 @@ def test_from_config_missing_keys_raise():
             rois=ROIS_4,
             label_map=LABEL_MAP,
         )
+
+
+def test_rois_mode_none_processes_all_detections_without_rois_file():
+    pipeline = Pipeline.from_config(
+        {
+            'rois_mode': 'none',
+            'segmenter': {
+                'name': 'fixed',
+                'params': {
+                    'items': [
+                        (None, 'red cube', 0.9),
+                        (None, 'green cube', 0.8),
+                    ],
+                },
+            },
+            'pose_estimator': {'name': 'recording_pose'},
+        },
+        label_map=LABEL_MAP,
+    )
+
+    results = pipeline.process(_make_frame())
+
+    assert pipeline.rois == []
+    assert pipeline.rois_mode == 'none'
+    assert [r.slot for r in results] == [None, None]
+    assert [r.label for r in results] == [LABEL_RED, LABEL_GREEN]
+    assert all(r.pose is not None for r in results)
+    assert pipeline._pose_estimator.calls == [None, None]
+
+
+def test_rois_mode_none_skips_missing_rois_yaml(tmp_path):
+    missing = tmp_path / 'no_rois.yaml'
+    pipeline = Pipeline.from_config(
+        {
+            'rois_mode': 'none',
+            'rois_path': str(missing),
+            'segmenter': {
+                'name': 'fixed',
+                'params': {'items': [(None, 'red cube', 0.5)]},
+            },
+            'pose_estimator': {'name': 'recording_pose'},
+        },
+        label_map=LABEL_MAP,
+    )
+    assert pipeline.rois == []
+    assert pipeline.process(_make_frame())[0].slot is None

@@ -25,14 +25,15 @@ from g1_perception.core.types import (
 @dataclass(frozen=True)
 class VotedSlot:
     """
-    Voted decision for one slot over the frame window.
+    Voted decision for one slot / track over the frame window.
 
     ``score`` is the fraction of window frames that agree with the winning
     label (0 when there are too few frames). ``n_frames`` is the number of
     frames currently in the slot's window. ``pose`` and ``yaw_deg`` are set
     only for ``red`` / ``green`` winners with at least one pose;
     ``yaw_consistency`` is the circular resultant length of ``4 * yaw`` in
-    [0, 1] (1 = all yaws agree modulo 90°).
+    [0, 1] (1 = all yaws agree modulo 90°). ``track_id`` is set in free
+    (no-ROI) mode; ``assignment_ok`` is False when place validation failed.
     """
 
     slot: int
@@ -42,6 +43,8 @@ class VotedSlot:
     pose: Pose | None
     yaw_deg: float | None
     yaw_consistency: float | None
+    track_id: int | None = None
+    assignment_ok: bool = True
 
 
 def circular_median_mod90(
@@ -124,6 +127,10 @@ class SlotVoter:
     def reset(self) -> None:
         """Forget all accumulated frames."""
         self._history.clear()
+
+    def forget(self, slot: int) -> None:
+        """Drop the window for one slot / track id."""
+        self._history.pop(slot, None)
 
     def _vote_slot(self, slot: int, history: list[SlotResult]) -> VotedSlot:
         """Vote a single slot from its window history."""

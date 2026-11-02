@@ -8,6 +8,7 @@ from g1_perception.core.config import Roi, load_rois
 from g1_perception.core.geometry import (
     cube_pose_on_table,
     deproject,
+    roi_from_mask,
     table_plane_around,
 )
 from g1_perception.core.types import Detection, Frame, Pose
@@ -21,6 +22,8 @@ class GeometricPoseEstimator:
 
     Deprojects the detection mask, fits a table plane around the ROI
     (excluding the object), then recovers centre and yaw modulo 90°.
+    When ``det.slot`` is unknown, the mask bounding box is used as the ROI
+    (free-detection / ``rois_mode=none``).
     """
 
     def __init__(
@@ -34,10 +37,10 @@ class GeometricPoseEstimator:
         z_max: float | None = None,
         ransac_threshold: float = 0.005,
     ) -> None:
-        if rois is None:
-            self.rois = load_rois(
-                Path(rois_path) if rois_path is not None else None
-            )
+        if rois is None and rois_path is None:
+            self.rois = []
+        elif rois is None:
+            self.rois = load_rois(Path(rois_path) if rois_path else None)
         else:
             self.rois = list(rois)
         self._roi_by_slot = {r.slot: r for r in self.rois}
@@ -49,9 +52,13 @@ class GeometricPoseEstimator:
 
     def estimate(self, frame: Frame, det: Detection) -> Pose | None:
         """Return geometric cube pose, or None if estimation fails."""
-        if det.slot is None or det.slot not in self._roi_by_slot:
-            return None
-        roi = self._roi_by_slot[det.slot]
+        if det.slot is not None and det.slot in self._roi_by_slot:
+            roi = self._roi_by_slot[det.slot]
+        else:
+            try:
+                roi = roi_from_mask(det.mask)
+            except ValueError:
+                return None
 
         points = deproject(
             det.mask,

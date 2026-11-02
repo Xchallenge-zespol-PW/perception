@@ -8,7 +8,7 @@ from typing import Any
 
 import g1_perception.pose  # noqa: F401  (registers pose estimators)
 import g1_perception.segmenters  # noqa: F401  (registers segmenters)
-from g1_perception.pipeline import get_registered
+from g1_perception.pipeline import ROIS_MODE_IMAGE, get_registered
 
 DEFAULT_PARAMS: dict[str, Any] = {
     'color_topic': '/camera/camera/color/image_raw',
@@ -25,6 +25,7 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'device': '',
     'conf': 0.25,
     'verify_hsv': False,
+    'rois_mode': ROIS_MODE_IMAGE,
     'rois_path': '',
     'hsv_path': '',
     'labels_path': '',
@@ -35,6 +36,13 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'vote_window': 10,
     'vote_min_ratio': 0.7,
     'vote_min_frames': 0,
+    'match_dist_m': 0.03,
+    'max_missed': 5,
+    'slot_axis': 'y',
+    'expected_count': 4,
+    'max_line_deviation_m': 0.03,
+    'min_spacing_m': 0.04,
+    'max_spacing_m': 0.20,
     'publish_rate_hz': 5.0,
     'sync_queue_size': 10,
     'sync_slop_s': 0.05,
@@ -67,6 +75,7 @@ def build_pipeline_config(params: Mapping[str, Any]) -> dict[str, Any]:
     }
 
     config: dict[str, Any] = {
+        'rois_mode': str(params.get('rois_mode', ROIS_MODE_IMAGE)),
         'segmenter': {
             'name': seg_name,
             'params': stage_params(get_registered(seg_name), seg_candidates),
@@ -90,6 +99,29 @@ def voter_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
         'window': int(params['vote_window']),
         'min_ratio': float(params['vote_min_ratio']),
         'min_frames': min_frames if min_frames > 0 else None,
+    }
+
+
+def tracker_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Return :class:`CubeTracker` kwargs from flat node parameters."""
+    vk = voter_kwargs(params)
+    return {
+        'match_dist_m': float(params['match_dist_m']),
+        'max_missed': int(params['max_missed']),
+        'vote_window': vk['window'],
+        'vote_min_ratio': vk['min_ratio'],
+        'vote_min_frames': vk['min_frames'],
+    }
+
+
+def slot_assign_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Return :func:`assign_slots` kwargs from flat node parameters."""
+    return {
+        'axis': str(params['slot_axis']),
+        'expected_count': int(params['expected_count']),
+        'max_line_deviation_m': float(params['max_line_deviation_m']),
+        'min_spacing_m': float(params['min_spacing_m']),
+        'max_spacing_m': float(params['max_spacing_m']),
     }
 
 

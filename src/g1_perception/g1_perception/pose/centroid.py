@@ -10,6 +10,7 @@ from g1_perception.core.config import Roi, load_rois
 from g1_perception.core.geometry import (
     deproject,
     plane_basis,
+    roi_from_mask,
     rotation_matrix_to_quat_xyzw,
     table_plane_around,
 )
@@ -23,7 +24,8 @@ class CentroidPoseEstimator:
     Estimate pose as the median of deprojected mask points.
 
     Orientation uses the table-plane normal as +Z and an arbitrary in-plane
-    X axis from :func:`plane_basis` (yaw not observed).
+    X axis from :func:`plane_basis` (yaw not observed). Without a known
+    slot ROI, the mask bounding box is used.
     """
 
     def __init__(
@@ -36,10 +38,10 @@ class CentroidPoseEstimator:
         z_max: float | None = None,
         ransac_threshold: float = 0.005,
     ) -> None:
-        if rois is None:
-            self.rois = load_rois(
-                Path(rois_path) if rois_path is not None else None
-            )
+        if rois is None and rois_path is None:
+            self.rois = []
+        elif rois is None:
+            self.rois = load_rois(Path(rois_path) if rois_path else None)
         else:
             self.rois = list(rois)
         self._roi_by_slot = {r.slot: r for r in self.rois}
@@ -50,9 +52,13 @@ class CentroidPoseEstimator:
 
     def estimate(self, frame: Frame, det: Detection) -> Pose | None:
         """Return median position with plane-aligned orientation, or None."""
-        if det.slot is None or det.slot not in self._roi_by_slot:
-            return None
-        roi = self._roi_by_slot[det.slot]
+        if det.slot is not None and det.slot in self._roi_by_slot:
+            roi = self._roi_by_slot[det.slot]
+        else:
+            try:
+                roi = roi_from_mask(det.mask)
+            except ValueError:
+                return None
 
         points = deproject(
             det.mask,

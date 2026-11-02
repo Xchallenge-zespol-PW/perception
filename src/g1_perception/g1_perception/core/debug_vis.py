@@ -50,8 +50,10 @@ def draw_debug(
     """
     Render a debug RGB image.
 
-    Current-frame masks are tinted by their per-frame label; ROI boxes and
-    text use the voted label (falling back to the per-frame result).
+    Current-frame masks are tinted by their per-frame label. With ROIs,
+    boxes and text use the voted label. Without ROIs, each result with a
+    mask shows ``id:colour status`` (and yaw) at the mask centroid —
+    pass ``results`` whose ``slot`` is already the place / track id.
     Optional ``inference_ms`` is drawn in the top-left corner.
     """
     out = rgb.copy()
@@ -64,8 +66,33 @@ def draw_debug(
             (1.0 - MASK_ALPHA) * out[mask] + MASK_ALPHA * color
         ).astype(np.uint8)
 
+    if rois:
+        _draw_roi_labels(out, rois, results, voted)
+    else:
+        _draw_free_labels(out, results, voted)
+
+    if inference_ms is not None:
+        cv2.putText(
+            out,
+            f'{inference_ms:.0f} ms',
+            (8, 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+    return out
+
+
+def _draw_roi_labels(
+    out: NDArray[np.uint8],
+    rois: Sequence[Roi],
+    results: Sequence[SlotResult],
+    voted: Sequence[VotedSlot],
+) -> None:
     by_slot_voted = {v.slot: v for v in voted}
-    by_slot_result = {r.slot: r for r in results}
+    by_slot_result = {r.slot: r for r in results if r.slot is not None}
     for roi in rois:
         v = by_slot_voted.get(roi.slot)
         r = by_slot_result.get(roi.slot)
@@ -86,18 +113,44 @@ def draw_debug(
             1,
             cv2.LINE_AA,
         )
-    if inference_ms is not None:
+
+
+def _draw_free_labels(
+    out: NDArray[np.uint8],
+    results: Sequence[SlotResult],
+    voted: Sequence[VotedSlot],
+) -> None:
+    by_id = {v.slot: v for v in voted}
+    for result in results:
+        if result.detection is None or not result.detection.mask.any():
+            continue
+        v = by_id.get(result.slot) if result.slot is not None else None
+        label = v.label if v is not None else result.label
+        status = (
+            'ok' if v is not None and v.assignment_ok
+            else ('bad' if v is not None else 'raw')
+        )
+        cube_id = (
+            str(result.slot) if result.slot is not None
+            else (str(v.track_id) if v and v.track_id is not None else '?')
+        )
+        color = _color(label)
+        ys, xs = np.where(result.detection.mask)
+        cx = int(xs.mean())
+        cy = int(ys.mean())
+        text = f'{cube_id}:{label} {status}'
+        if v is not None and v.yaw_deg is not None:
+            text += f' yaw {v.yaw_deg:.0f}'
         cv2.putText(
             out,
-            f'{inference_ms:.0f} ms',
-            (8, 20),
+            text,
+            (max(cx - 40, 2), max(cy - 8, 12)),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
+            0.45,
+            color,
+            1,
             cv2.LINE_AA,
         )
-    return out
 
 
 def _color(label: str) -> tuple[int, int, int]:

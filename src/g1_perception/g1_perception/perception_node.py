@@ -42,14 +42,18 @@ from g1_perception.core.frame_utils import (  # noqa: E402
     intrinsics_from_k,
 )
 from g1_perception.core.geometry import transform_pose  # noqa: E402
+from g1_perception.core.slot_assign import assign_slots  # noqa: E402
+from g1_perception.core.tracker import CubeTracker, TrackedCube  # noqa: E402
 from g1_perception.core.types import Frame, SlotResult  # noqa: E402
 from g1_perception.core.voting import SlotVoter, VotedSlot  # noqa: E402
 from g1_perception.node_config import (  # noqa: E402
     DEFAULT_PARAMS,
     build_pipeline_config,
+    slot_assign_kwargs,
+    tracker_kwargs,
     voter_kwargs,
 )
-from g1_perception.pipeline import Pipeline  # noqa: E402
+from g1_perception.pipeline import ROIS_MODE_NONE, Pipeline  # noqa: E402
 from g1_perception.ros_conversions import voted_to_detection_array  # noqa: E402
 
 
@@ -71,6 +75,7 @@ class _PublishBundle:
     voted: list[VotedSlot]
     rgb: np.ndarray
     inference_ms: float
+    frame_id: str
 
 
 class PerceptionNode(Node):
@@ -80,8 +85,8 @@ class PerceptionNode(Node):
     The sync callback only keeps the **newest** message triple (no queue).
     A worker thread always processes that newest set (~125 ms / frame on the
     robot CPU), so older frames are dropped instead of building latency.
-    Results are published at ``publish_rate_hz``. Spin with a multi-threaded
-    executor so TF callbacks keep running during ``lookup_transform``.
+    With ``rois_mode=none``, detections are tracked in 3D and assigned place
+    numbers after TF to ``target_frame``. Results publish at ``publish_rate_hz``.
     """
 
     def __init__(self) -> None:
@@ -101,7 +106,11 @@ class PerceptionNode(Node):
 
         self._pipeline = Pipeline.from_config(build_pipeline_config(p))
         self._rois = self._pipeline.rois
+        self._rois_mode = self._pipeline.rois_mode
+        self._free = self._rois_mode == ROIS_MODE_NONE or not self._rois
         self._voter = SlotVoter(**voter_kwargs(p))
+        self._tracker = CubeTracker(**tracker_kwargs(p)) if self._free else None
+        self._assign_kw = slot_assign_kwargs(p)
         self._bridge = CvBridge()
 
         self._tf_buffer = Buffer()
@@ -169,7 +178,8 @@ class PerceptionNode(Node):
         self._worker.start()
         self.get_logger().info(
             f"segmenter={p['segmenter']} pose={p['pose_estimator']} "
-            f'slots={[r.slot for r in self._rois]} '
+            f'rois_mode={self._rois_mode} '
+            f'slots={[r.slot for r in self._rois] or "(free)"} '
             f"target_frame={p['target_frame'] or '(camera)'} "
             f"publish_rate_hz={rate} -> {p['output_topic']}"
         )
@@ -206,7 +216,7 @@ class PerceptionNode(Node):
             self._process_bundle(bundle)
 
     def _process_bundle(self, bundle: _LatestBundle) -> None:
-        """Convert, run pipeline + voter, store result for the publish timer."""
+        """Convert, run pipeline + track/vote, store result for publish."""
         try:
             frame = self._to_frame(bundle.color, bundle.depth, bundle.info)
         except (CvBridgeError, ValueError) as exc:
@@ -228,18 +238,43 @@ class PerceptionNode(Node):
         if self._stop.is_set() or not self.context.ok():
             return
 
-        voted = self._voter.update(results)
         camera_header = Header(
             stamp=bundle.color.header.stamp,
             frame_id=bundle.color.header.frame_id,
         )
+
+        if self._free:
+            assert self._tracker is not None
+            tracked = self._tracker.update(results)
+            tracked_tf, frame_id = self._tracks_to_target(
+                tracked, camera_header
+            )
+            assignment = assign_slots(tracked_tf, **self._assign_kw)
+            voted = assignment.slots
+            debug_results = _debug_results_from_tracks(
+                tracked_tf, voted
+            )
+            if not assignment.valid:
+                self.get_logger().warning(
+                    'slot assignment invalid '
+                    f'(n={len(tracked_tf)}, expected='
+                    f'{self._assign_kw["expected_count"]}); '
+                    'publishing track ids as uncertain',
+                    throttle_duration_sec=2.0,
+                )
+        else:
+            voted_cam = self._voter.update(results)
+            voted, frame_id = self._voted_to_target(voted_cam, camera_header)
+            debug_results = results
+
         with self._result_lock:
             self._result = _PublishBundle(
                 camera_header=camera_header,
-                results=results,
+                results=debug_results,
                 voted=voted,
                 rgb=frame.rgb,
                 inference_ms=inference_ms,
+                frame_id=frame_id,
             )
         with self._stats_lock:
             self._infer_ms_sum += inference_ms
@@ -252,15 +287,12 @@ class PerceptionNode(Node):
         if bundle is None or not self.context.ok():
             return
 
-        out_voted, frame_id = self._to_target_frame(
-            bundle.voted, bundle.camera_header
-        )
         out_header = Header(
-            stamp=bundle.camera_header.stamp, frame_id=frame_id
+            stamp=bundle.camera_header.stamp, frame_id=bundle.frame_id
         )
         self._pub_cubes.publish(
             voted_to_detection_array(
-                out_voted, out_header, float(self._params['cube_size_m'])
+                bundle.voted, out_header, float(self._params['cube_size_m'])
             )
         )
 
@@ -306,7 +338,6 @@ class PerceptionNode(Node):
 
     def _to_frame(self, color: Image, depth: Image, info: CameraInfo) -> Frame:
         """Convert ROS messages to a :class:`Frame` (RGB, depth in metres)."""
-        # desired_encoding='rgb8' yields RGB for Frame; YOLO converts to BGR.
         rgb = self._bridge.imgmsg_to_cv2(color, desired_encoding='rgb8')
         depth_raw = self._bridge.imgmsg_to_cv2(
             depth, desired_encoding='passthrough'
@@ -325,17 +356,15 @@ class PerceptionNode(Node):
             stamp=float(stamp),
         )
 
-    def _to_target_frame(
+    def _lookup_tf(
         self,
-        voted: list[VotedSlot],
         camera_header: Header,
-    ) -> tuple[list[VotedSlot], str]:
-        """Transform poses to ``target_frame``; fall back to camera frame."""
+    ) -> tuple[np.ndarray, np.ndarray, str] | None:
+        """Return ``(translation, rotation_xyzw, target)`` or None."""
         target = str(self._params['target_frame']).strip()
         source = camera_header.frame_id
         if not target or target == source:
-            return voted, source
-
+            return None
         try:
             tf = self._tf_buffer.lookup_transform(
                 target,
@@ -352,17 +381,75 @@ class PerceptionNode(Node):
                 f'No TF {source} -> {target} ({exc}); publishing in {source}',
                 throttle_duration_sec=5.0,
             )
-            return voted, source
-
+            return None
         t = tf.transform.translation
         q = tf.transform.rotation
-        translation = np.array([t.x, t.y, t.z])
-        rotation = np.array([q.x, q.y, q.z, q.w])
+        return (
+            np.array([t.x, t.y, t.z]),
+            np.array([q.x, q.y, q.z, q.w]),
+            target,
+        )
+
+    def _voted_to_target(
+        self,
+        voted: list[VotedSlot],
+        camera_header: Header,
+    ) -> tuple[list[VotedSlot], str]:
+        """Transform voted poses to ``target_frame``; fall back to camera."""
+        tf = self._lookup_tf(camera_header)
+        if tf is None:
+            return voted, camera_header.frame_id
+        translation, rotation, target = tf
         return [
             replace(v, pose=transform_pose(v.pose, translation, rotation))
             if v.pose is not None else v
             for v in voted
         ], target
+
+    def _tracks_to_target(
+        self,
+        tracked: list[TrackedCube],
+        camera_header: Header,
+    ) -> tuple[list[TrackedCube], str]:
+        """Transform track poses to ``target_frame`` before slot assignment."""
+        tf = self._lookup_tf(camera_header)
+        if tf is None:
+            return tracked, camera_header.frame_id
+        translation, rotation, target = tf
+        out: list[TrackedCube] = []
+        for t in tracked:
+            if t.pose is None:
+                out.append(t)
+            else:
+                out.append(
+                    replace(
+                        t,
+                        pose=transform_pose(t.pose, translation, rotation),
+                    )
+                )
+        return out, target
+
+
+def _debug_results_from_tracks(
+    tracked: list[TrackedCube],
+    voted: list[VotedSlot],
+) -> list[SlotResult]:
+    """Build SlotResults (with masks) keyed by published place / track id."""
+    by_track = {t.track_id: t for t in tracked}
+    out: list[SlotResult] = []
+    for v in voted:
+        tid = v.track_id if v.track_id is not None else v.slot
+        tr = by_track.get(tid)
+        out.append(
+            SlotResult(
+                slot=v.slot,
+                label=v.label,
+                score=v.score,
+                detection=tr.detection if tr is not None else None,
+                pose=v.pose,
+            )
+        )
+    return out
 
 
 def main(args: list[str] | None = None) -> None:
