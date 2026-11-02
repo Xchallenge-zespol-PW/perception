@@ -82,8 +82,11 @@ rsync -avz --delete \
 rsync -avz "$MODEL_PATH" "${HOST}:${REMOTE_MODELS}/${MODEL_NAME}"
 
 echo "==> colcon build w kontenerze humble…"
+# Do NOT use bash -lc 'source … && colcon …': humble.sh strips quotes and
+# bash ends up with -c "source" ($0=setup.bash) → "source: filename argument
+# required". Run a synced helper script by path instead (no embedded shell).
 ssh -t "$HOST" \
-  '~/g1_humble/humble.sh run bash -lc "source /opt/ros/humble/setup.bash && cd /ws && colcon build --symlink-install --packages-select g1_perception"'
+  '~/g1_humble/humble.sh run bash /ws/src/perception/tools/robot_colcon_build.sh'
 
 cat <<EOF
 

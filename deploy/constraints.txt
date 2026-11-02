@@ -1,3 +1,7 @@
 # Pip constraints for the robot humble container (and laptop when installing ultralytics).
 # cv_bridge (ROS 2 Humble) is built against NumPy 1.x — NumPy 2 breaks import.
 numpy<2
+# setuptools>=80 dropped `setup.py develop` (colcon --symlink-install).
+# New setuptools + old packaging → canonicalize_version(strip_trailing_zero=...) TypeError.
+setuptools>=64,<80
+packaging>=22

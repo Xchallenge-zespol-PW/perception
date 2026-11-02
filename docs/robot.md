@@ -60,9 +60,10 @@ pip3 install --user \
 python3 -c "import numpy, onnxruntime; from cv_bridge import CvBridge; print(numpy.__version__)"
 ```
 
-- `deploy/constraints.txt` — `numpy<2`
+- `deploy/constraints.txt` — `numpy<2`, `setuptools>=64,<80`, `packaging>=22`
 - `deploy/requirements-robot.txt` — `ultralytics`, `onnxruntime`, `onnx`, `numpy<2`, `opencv-python<4.12`
 - Numpy **musi** być 1.x (`cv_bridge`).
+- Zły duet `setuptools`/`packaging` w `~/.local` psuje `colcon` (`strip_trailing_zero`). Build w `robot_colcon_build.sh` ustawia `PYTHONNOUSERSITE=1`; na stałe: `pip3 install --user -c … "setuptools>=64,<80" "packaging>=22"`.
 - Na stałe: wpisy z `requirements-robot.txt` (z `numpy<2`) do `~/g1_humble/paczki-pip.txt` i `rebuild` uzgodniony z grupą.
 
 Dodaj `YOLO_AUTOINSTALL=false` do `~/.bashrc` użytkownika w kontenerze / entrypointu.
@@ -79,12 +80,10 @@ Z laptopa (kod → `~/humble_ws/src/perception/`, model → `~/humble_ws/models/
 ./tools/deploy_robot.sh models/cubes_seg.onnx unitree@192.168.123.164
 ```
 
-Skrypt wyklucza `data/`, `datasets/`, `runs/`, `results/`, `build/`, `install/`, `log/`, `models/`, `.git/`, `*.pt`, `*.onnx`, potem:
+Skrypt wyklucza `data/`, `datasets/`, `runs/`, `results/`, `build/`, `install/`, `log/`, `models/`, `.git/`, `*.pt`, `*.onnx`, potem (bez `bash -lc` — `humble.sh` gubi cudzysłowy; build to `tools/robot_colcon_build.sh`):
 
 ```bash
-~/g1_humble/humble.sh run bash -lc \
-  "source /opt/ros/humble/setup.bash && cd /ws && \
-   colcon build --symlink-install --packages-select g1_perception"
+~/g1_humble/humble.sh run bash /ws/src/perception/tools/robot_colcon_build.sh
 ```
 
 Na końcu wypisuje komendy kamery i węzła (`config:=params_robot.yaml`).
