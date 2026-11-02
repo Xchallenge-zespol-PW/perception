@@ -47,8 +47,8 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 ├── docker/constraints.txt         # PIP_CONSTRAINT: numpy<2, opencv-python<4.12, setuptools<80
 ├── .devcontainer/                 # /ws, /bags, sieć host, udev
 ├── src/g1_perception/             # pakiet ament_python
-│   ├── config/                    # rois, labels, params.yaml + params_{laptop,robot}.yaml
-│   ├── launch/perception.launch.py
+│   ├── config/                    # rois, labels, params_{laptop,robot}.yaml
+│   ├── launch/perception.launch.py  # config:=params_laptop.yaml (domyślnie)
 ├── deploy/                        # requirements-robot.txt, constraints.txt (numpy<2)
 ├── docs/robot.md                  # Jetson Orin NX / Humble / ONNX CPU
 │   ├── g1_perception/
@@ -135,7 +135,7 @@ Nie instaluj `pytest>=7` przez `pip --user` — gryzie się z pluginami ROS (`la
 
 ## Węzeł ROS 2 (`perception_node`)
 
-Synchronizuje kolor + głębię aligned + `camera_info` (`ApproximateTimeSynchronizer`), buduje `Frame` (RGB, głębia w metrach), uruchamia `Pipeline.process` i `SlotVoter`, publikuje wynik w `target_frame`. Przetwarzana jest najnowsza zsynchronizowana klatka, z częstotliwością `publish_rate_hz` (starsze klatki są pomijane).
+Kamera ~15 kl/s, inferencja ~125 ms (~8 kl/s): callback synchronizatora zapisuje **tylko najnowszy** zestaw (kolor + głębia + `camera_info`, QoS sensor data). Osobny wątek bierze ten zestaw, buduje `Frame` (rgb8→RGB; YOLO wewnątrz robi BGR; 16UC1 mm→float32 m), woła `Pipeline.process` + `SlotVoter`. Klatki, które przyszły w trakcie inferencji, są **pomijane** (brak kolejki = brak narastającego opóźnienia). Publikacja `/perception/cubes`, maski i debugu idzie z timerem `publish_rate_hz`. Co 10 s log: średni czas inferencji [ms] i liczba pominiętych klatek. Przed Ultralytics ustawiane jest `YOLO_AUTOINSTALL=false`.
 
 ### Uruchomienie na bagu
 
@@ -143,21 +143,22 @@ Terminal 1 — odtwarzanie w pętli:
 
 ```bash
 source /opt/ros/humble/setup.bash
-ros2 bag play /bags/kostki_GRGR_mocne_20261015_184734 --loop
+ros2 bag play /bags/kostki_RGGR_niskie_20261015_184542 --loop
 ```
 
-Terminal 2 — węzeł (z `cwd=/ws`, bo `model_path` w `params.yaml` jest względny):
+Terminal 2 — węzeł (z `cwd=/ws`, bo `model_path` jest względny):
 
 ```bash
 cd /ws
 source /opt/ros/humble/setup.bash && source install/setup.bash
+# laptop (domyślnie config:=params_laptop.yaml):
 ros2 launch g1_perception perception.launch.py
-# własne parametry (np. inne ROI):
-ros2 launch g1_perception perception.launch.py params_file:=/ścieżka/params.yaml
-# bez launch, z nadpisaniem pojedynczego parametru:
+# robot:
+ros2 launch g1_perception perception.launch.py config:=params_robot.yaml
+# nadpisanie ROI bez edycji YAML:
 ros2 run g1_perception perception_node --ros-args \
-  --params-file install/g1_perception/share/g1_perception/config/params.yaml \
-  -p rois_path:=/ścieżka/rois.yaml
+  --params-file install/g1_perception/share/g1_perception/config/params_laptop.yaml \
+  -p rois_path:=src/g1_perception/config/rois_RGGR_niskie_184542.yaml
 ```
 
 Terminal 3 — podgląd:
@@ -169,18 +170,17 @@ ros2 run rqt_image_view rqt_image_view /perception/debug_image
 
 Uwagi:
 
-- `--loop` cofa znaczniki czasu na początku każdej pętli — zostaw `use_sim_time:=false` (domyślnie). `use_sim_time:=true` tylko z `ros2 bag play --clock` bez `--loop`.
-- `rois.yaml` musi pasować do kadru nagrania. ROI są w pikselach, więc wymagają stałej pozycji kamery względem stołu.
-- `params.yaml` jest instalowany do `share/g1_perception/config/`; po zmianie w `src/` z `--symlink-install` działa od razu.
-- Bez GPU (devcontainer na CPU) YOLO daje ~2–5 Hz; `publish_rate_hz` to górny limit.
+- `--loop` cofa znaczniki czasu — zostaw `use_sim_time:=false`. `use_sim_time:=true` tylko z `ros2 bag play --clock` bez `--loop`.
+- `rois.yaml` / `rois_path` muszą pasować do kadru. ROI w pikselach wymagają stałej pozycji kamery względem stołu.
+- `config/*.yaml` instalują się do `share/g1_perception/config/` (`setup.py` glob).
+- Na robocie ONNX CPU ~124 ms/klatkę; `skipped_frames` w logu co 10 s pokazuje, ile klatek 15 Hz odrzucono.
 
 ### Parametry (`config/params_*.yaml`)
 
-Te same klucze w trzech plikach: `params.yaml` (domyślny launch), `params_laptop.yaml` (`.pt` / `.onnx`), `params_robot.yaml` (`.onnx`, `device: cpu`). Wdrożenie na G1/PC2: [docs/robot.md](docs/robot.md), zależności `deploy/requirements-robot.txt`.
+Te same klucze: `params_laptop.yaml` (`.pt` / `.onnx`), `params_robot.yaml` (`.onnx`, `device: cpu`). Wdrożenie G1/PC2: [docs/robot.md](docs/robot.md), `deploy/requirements-robot.txt`.
 
 ```bash
-ros2 launch g1_perception perception.launch.py \
-  params_file:=$(ros2 pkg prefix g1_perception)/share/g1_perception/config/params_laptop.yaml
+ros2 launch g1_perception perception.launch.py config:=params_laptop.yaml
 ```
 
 | Grupa | Parametry |
@@ -212,9 +212,9 @@ ros2 launch g1_perception perception.launch.py \
 
 Poza jest tylko dla `red` / `green`. Dla `empty`, `uncertain` albo koloru bez udanej estymacji pozy: `bbox.size = 0`, a pola pozy są zerowe (orientacja jednostkowa) i należy je ignorować.
 
-**`/perception/debug_image`** — `sensor_msgs/Image` `rgb8`, ramka kamery: ROI w kolorze wyniku głosowania, maski bieżącej klatki, opis `slot:etykieta score yaw`. Publikowany tylko, gdy ktoś subskrybuje.
+**`/perception/debug_image`** — `sensor_msgs/Image` `rgb8`, ramka kamery: ROI, maski, `slot:etykieta score yaw`, czas inferencji w ms (lewy górny róg). Publikowany tylko, gdy ktoś subskrybuje.
 
-**`/perception/mask`** — `sensor_msgs/Image` `mono8`, ramka kamery: suma masek detekcji przypisanych do slotów w bieżącej klatce (0 / 255), wejście dla FoundationPose.
+**`/perception/mask`** — `sensor_msgs/Image` `mono8`, ramka kamery: suma masek detekcji przypisanych do slotów w bieżącej klatce (0 / 255).
 
 ---
 

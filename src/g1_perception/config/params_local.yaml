@@ -1,7 +1,5 @@
-# Laptop / devcontainer: RealSense (D455 or D435i), YOLO .pt or .onnx.
-# Same keys as params_robot.yaml. Launch:
-#   ros2 launch g1_perception perception.launch.py \
-#     params_file:=$(ros2 pkg prefix g1_perception)/share/g1_perception/config/params_laptop.yaml
+# Local overrides (not the launch default). Prefer params_laptop.yaml / params_robot.yaml:
+#   ros2 launch g1_perception perception.launch.py config:=params_laptop.yaml
 # Relative model_path is resolved against the process cwd (use /ws or humble_ws).
 perception_node:
   ros__parameters:

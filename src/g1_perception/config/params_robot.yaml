@@ -1,7 +1,6 @@
 # Unitree G1 / PC2 (Jetson Orin NX): RealSense D435i in head, ONNX on CPU.
 # Same keys as params_laptop.yaml. Launch inside the humble container:
-#   ros2 launch g1_perception perception.launch.py \
-#     params_file:=$(ros2 pkg prefix g1_perception)/share/g1_perception/config/params_robot.yaml
+#   ros2 launch g1_perception perception.launch.py config:=params_robot.yaml
 # model_path must be a .onnx exported at imgsz 640 (see docs/robot.md).
 perception_node:
   ros__parameters:

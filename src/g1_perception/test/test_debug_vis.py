@@ -55,10 +55,13 @@ def test_draw_debug_tints_masks_and_draws_voted_roi():
         VotedSlot(1, LABEL_EMPTY, 1.0, 10, None, None, None),
     ]
 
-    out = draw_debug(rgb, rois, _results(), voted)
+    results = _results()
+    out = draw_debug(rgb, rois, results, voted, inference_ms=124.0)
+    base = draw_debug(rgb, rois, results, voted)
 
     assert out.shape == rgb.shape and out.dtype == np.uint8
     assert not rgb.any()  # input untouched
     assert out[25, 15, 0] > 0 and out[25, 15, 1] < out[25, 15, 0]  # red tint
     assert tuple(out[25, 5]) == LABEL_COLORS_RGB[LABEL_RED]  # ROI 0 border
     assert tuple(out[25, 40]) == LABEL_COLORS_RGB[LABEL_EMPTY]  # ROI 1 border
+    assert np.count_nonzero(out != base) > 0  # inference_ms text drawn

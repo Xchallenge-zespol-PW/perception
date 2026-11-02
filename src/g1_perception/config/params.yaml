@@ -1,7 +1,7 @@
 # Default / legacy params (same keys as params_laptop.yaml and params_robot.yaml).
-# Prefer environment-specific files:
-#   config/params_laptop.yaml  — .pt or .onnx on the laptop / devcontainer
-#   config/params_robot.yaml   — .onnx (imgsz 640), device=cpu on G1/PC2
+# Launch selects a file via: ros2 launch ... config:=params_laptop.yaml
+#   params_laptop.yaml — .pt or .onnx on the laptop / devcontainer
+#   params_robot.yaml  — .onnx (imgsz 640), device=cpu on G1/PC2
 # See docs/robot.md. Empty strings = package defaults; paths relative to cwd.
 perception_node:
   ros__parameters:

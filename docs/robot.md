@@ -84,8 +84,7 @@ source install/setup.bash
 Parametry robota:
 
 ```bash
-ros2 launch g1_perception perception.launch.py \
-  params_file:=$(ros2 pkg prefix g1_perception)/share/g1_perception/config/params_robot.yaml
+ros2 launch g1_perception perception.launch.py config:=params_robot.yaml
 ```
 
 Upewnij się, że cwd (albo absolutna `model_path`) widzi plik `.onnx`, a `rois_path` wskazuje kalibrację pod kamerę w głowie G1.

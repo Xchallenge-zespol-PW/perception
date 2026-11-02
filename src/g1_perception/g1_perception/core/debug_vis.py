@@ -44,12 +44,15 @@ def draw_debug(
     rois: Sequence[Roi],
     results: Sequence[SlotResult],
     voted: Sequence[VotedSlot],
+    *,
+    inference_ms: float | None = None,
 ) -> NDArray[np.uint8]:
     """
     Render a debug RGB image.
 
     Current-frame masks are tinted by their per-frame label; ROI boxes and
     text use the voted label (falling back to the per-frame result).
+    Optional ``inference_ms`` is drawn in the top-left corner.
     """
     out = rgb.copy()
     for result in results:
@@ -81,6 +84,17 @@ def draw_debug(
             0.45,
             color,
             1,
+            cv2.LINE_AA,
+        )
+    if inference_ms is not None:
+        cv2.putText(
+            out,
+            f'{inference_ms:.0f} ms',
+            (8, 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2,
             cv2.LINE_AA,
         )
     return out
