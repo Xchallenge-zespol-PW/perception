@@ -63,31 +63,22 @@ Dodaj `YOLO_AUTOINSTALL=false` do `~/.bashrc` użytkownika w kontenerze / entryp
 
 ## Wdrożenie kodu (rsync + colcon)
 
-Na PC deweloperskim (ścieżki dostosuj):
+Z laptopa (całe repo → `~/humble_ws/src/perception/`, model → `~/humble_ws/models/`, build w kontenerze):
 
 ```bash
-rsync -av --delete \
-  --exclude '.git' --exclude 'build' --exclude 'install' --exclude 'log' \
-  --exclude 'data' --exclude 'datasets' --exclude 'runs' --exclude '__pycache__' \
-  ./src/g1_perception/  PC2:~/humble_ws/src/g1_perception/
+./tools/deploy_robot.sh models/cubes_seg.onnx
+# inny host:
+./tools/deploy_robot.sh models/cubes_seg.onnx unitree@192.168.123.164
 ```
 
-W kontenerze humble na PC2:
+Skrypt wyklucza `data/`, `datasets/`, `runs/`, `results/`, `build/`, `install/`, `log/`, `.git/` i `*.pt`, potem przez SSH:
 
 ```bash
-cd ~/humble_ws
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select g1_perception
-source install/setup.bash
+~/g1_humble/humble.sh run bash -lc \
+  "cd /ws && colcon build --symlink-install --packages-select g1_perception"
 ```
 
-Parametry robota:
-
-```bash
-ros2 launch g1_perception perception.launch.py config:=params_robot.yaml
-```
-
-Upewnij się, że cwd (albo absolutna `model_path`) widzi plik `.onnx`, a `rois_path` wskazuje kalibrację pod kamerę w głowie G1.
+Na końcu wypisuje komendy kamery i węzła (`config:=params_robot.yaml`). Upewnij się, że `model_path` / `rois_path` pasują do instalacji na G1.
 
 ## Laptop vs robot (pliki params)
 
