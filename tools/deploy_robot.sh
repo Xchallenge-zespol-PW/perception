@@ -5,9 +5,11 @@
 #   ./tools/deploy_robot.sh <model.onnx> [user@host]
 #
 # Domyślny host: unitree@192.168.123.164
-# Kod  → ~/humble_ws/src/perception/
-# Model → ~/humble_ws/models/<basename>
-# Build → ~/g1_humble/humble.sh run … colcon build --packages-select g1_perception
+# Kod  → ~/humble_ws/src/perception/   (bez *.pt, *.onnx, models/)
+# Model → ~/humble_ws/models/<basename>  (= /ws/models/ w kontenerze)
+# Build → ~/g1_humble/humble.sh run … source ROS + colcon build
+#
+# Opcjonalnie (żeby nie podawać hasła 3×): ssh-copy-id unitree@192.168.123.164
 
 set -euo pipefail
 
@@ -16,12 +18,18 @@ usage() {
 Użycie: deploy_robot.sh <model.onnx> [user@host]
 
   model.onnx   lokalna ścieżka modelu ONNX (imgsz 640); kopiowany do
-               ~/humble_ws/models/ na robocie
+               ~/humble_ws/models/ na robocie (= /ws/models/ w kontenerze)
   user@host    domyślnie unitree@192.168.123.164
 
 Przykład:
   ./tools/deploy_robot.sh models/cubes_seg.onnx
   ./tools/deploy_robot.sh runs/segment/.../best.onnx unitree@192.168.123.164
+
+Zależności Pythona skrypt NIE instaluje. Na robocie (hotspot, do resetu):
+  ~/g1_humble/humble.sh shell
+  pip3 install --user \
+    -c /ws/src/perception/deploy/constraints.txt \
+    -r /ws/src/perception/deploy/requirements-robot.txt
 EOF
 }
 
@@ -64,7 +72,9 @@ rsync -avz --delete \
   --exclude 'build/' \
   --exclude 'install/' \
   --exclude 'log/' \
+  --exclude 'models/' \
   --exclude '*.pt' \
+  --exclude '*.onnx' \
   --exclude '__pycache__/' \
   --exclude '.pytest_cache/' \
   "${REPO_ROOT}/" "${HOST}:${REMOTE_CODE}/"
@@ -73,27 +83,28 @@ rsync -avz "$MODEL_PATH" "${HOST}:${REMOTE_MODELS}/${MODEL_NAME}"
 
 echo "==> colcon build w kontenerze humble…"
 ssh -t "$HOST" \
-  '~/g1_humble/humble.sh run bash -lc "cd /ws && colcon build --symlink-install --packages-select g1_perception"'
+  '~/g1_humble/humble.sh run bash -lc "source /opt/ros/humble/setup.bash && cd /ws && colcon build --symlink-install --packages-select g1_perception"'
 
 cat <<EOF
 
 ==> Deploy OK.
 
-Na robocie (w kontenerze humble, cwd=/ws):
+Na robocie (w kontenerze humble):
 
-  # Kamera (D435i, 640x480 @ 15, aligned depth):
+  # Kamera (D435i, 640x480 @ 15, aligned depth) — osobny terminal:
   ros2 launch realsense2_camera rs_launch.py \\
     camera_namespace:=camera \\
     enable_color:=true enable_depth:=true align_depth.enable:=true \\
     rgb_camera.color_profile:=640x480x15 \\
     depth_module.depth_profile:=640x480x15
 
-  # Węzeł percepcji (model: models/${MODEL_NAME} względem cwd):
-  source /opt/ros/humble/setup.bash && source install/setup.bash
+  # Węzeł (params_robot.yaml: model_path=/ws/models/cubes_seg.onnx):
+  source /opt/ros/humble/setup.bash && source /ws/install/setup.bash
   export YOLO_AUTOINSTALL=false
+  cd /ws
   ros2 launch g1_perception perception.launch.py config:=params_robot.yaml
 
-Jeśli params_robot.yaml ma inną model_path niż models/${MODEL_NAME}, nadpisz:
+Jeśli wgrano inny plik niż cubes_seg.onnx:
   ros2 launch g1_perception perception.launch.py config:=params_robot.yaml \\
-    --ros-args -p model_path:=models/${MODEL_NAME}
+    model_path:=/ws/models/${MODEL_NAME}
 EOF

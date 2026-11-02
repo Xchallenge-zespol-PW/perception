@@ -21,16 +21,24 @@ def _launch_setup(context, *args, **kwargs):
         )
 
     use_sim_time = LaunchConfiguration('use_sim_time')
+    parameters = [
+        params_path,
+        {'use_sim_time': ParameterValue(use_sim_time, value_type=bool)},
+    ]
+
+    # Optional override (ros2 launch … model_path:=/ws/models/foo.onnx).
+    # Empty default keeps the value from the YAML params file.
+    model_path = LaunchConfiguration('model_path').perform(context).strip()
+    if model_path:
+        parameters.append({'model_path': model_path})
+
     return [
         Node(
             package='g1_perception',
             executable='perception_node',
             name='perception_node',
             output='screen',
-            parameters=[
-                params_path,
-                {'use_sim_time': ParameterValue(use_sim_time, value_type=bool)},
-            ],
+            parameters=parameters,
         ),
     ]
 
@@ -49,6 +57,14 @@ def generate_launch_description():
             'use_sim_time',
             default_value='false',
             description='Use /clock (only with ros2 bag play --clock, no --loop)',
+        ),
+        DeclareLaunchArgument(
+            'model_path',
+            default_value='',
+            description=(
+                'Override perception_node model_path from the YAML '
+                '(e.g. model_path:=/ws/models/cubes_seg.onnx)'
+            ),
         ),
         OpaqueFunction(function=_launch_setup),
     ])
