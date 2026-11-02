@@ -1,0 +1,45 @@
+# Laptop / devcontainer: RealSense (D455 or D435i), YOLO .pt or .onnx.
+# Same keys as params_robot.yaml. Launch:
+#   ros2 launch g1_perception perception.launch.py \
+#     params_file:=$(ros2 pkg prefix g1_perception)/share/g1_perception/config/params_laptop.yaml
+# Relative model_path is resolved against the process cwd (use /ws or humble_ws).
+perception_node:
+  ros__parameters:
+    # Inputs (RealSense aligned depth: 16UC1 millimetres)
+    color_topic: /camera/camera/color/image_raw
+    depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+    camera_info_topic: /camera/camera/color/camera_info
+    sync_queue_size: 10
+    sync_slop_s: 0.05
+
+    # Outputs
+    output_topic: /perception/cubes
+    debug_image_topic: /perception/debug_image
+    mask_topic: /perception/mask
+    target_frame: camera_link
+    tf_timeout_s: 0.1
+
+    # Pipeline
+    segmenter: yolo_seg
+    pose_estimator: geometric
+    # Prefer .pt on laptop with CUDA; .onnx (imgsz 640) also works via Ultralytics.
+    model_path: runs/segment/runs/seg/cubes-2/weights/best.pt
+    device: ""
+    conf: 0.25
+    verify_hsv: false
+    rois_path: ""
+    hsv_path: ""
+    labels_path: ""
+
+    # Pose estimation
+    cube_size_m: 0.05
+    margin_px: 20
+    z_min_m: 0.1
+    z_max_m: 2.0
+
+    # Multi-frame voting
+    vote_window: 10
+    vote_min_ratio: 0.7
+    vote_min_frames: 0
+
+    publish_rate_hz: 5.0

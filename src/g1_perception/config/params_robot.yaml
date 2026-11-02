@@ -1,0 +1,45 @@
+# Unitree G1 / PC2 (Jetson Orin NX): RealSense D435i in head, ONNX on CPU.
+# Same keys as params_laptop.yaml. Launch inside the humble container:
+#   ros2 launch g1_perception perception.launch.py \
+#     params_file:=$(ros2 pkg prefix g1_perception)/share/g1_perception/config/params_robot.yaml
+# model_path must be a .onnx exported at imgsz 640 (see docs/robot.md).
+perception_node:
+  ros__parameters:
+    # Inputs (D435i, rgb8 + aligned depth 16UC1 mm)
+    color_topic: /camera/camera/color/image_raw
+    depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+    camera_info_topic: /camera/camera/color/camera_info
+    sync_queue_size: 10
+    sync_slop_s: 0.05
+
+    # Outputs
+    output_topic: /perception/cubes
+    debug_image_topic: /perception/debug_image
+    mask_topic: /perception/mask
+    # On the robot set the G1 body / torso frame once TF is available.
+    target_frame: camera_link
+    tf_timeout_s: 0.1
+
+    # Pipeline (ONNX Runtime CPU via Ultralytics; no CUDA in the humble container)
+    segmenter: yolo_seg
+    pose_estimator: geometric
+    model_path: models/cubes_seg.onnx
+    device: cpu
+    conf: 0.25
+    verify_hsv: false
+    rois_path: ""
+    hsv_path: ""
+    labels_path: ""
+
+    # Pose estimation
+    cube_size_m: 0.05
+    margin_px: 20
+    z_min_m: 0.1
+    z_max_m: 2.0
+
+    # Multi-frame voting (~124 ms/frame ONNX → keep publish rate modest)
+    vote_window: 10
+    vote_min_ratio: 0.7
+    vote_min_frames: 0
+
+    publish_rate_hz: 5.0

@@ -47,8 +47,10 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 ├── docker/constraints.txt         # PIP_CONSTRAINT: numpy<2, opencv-python<4.12, setuptools<80
 ├── .devcontainer/                 # /ws, /bags, sieć host, udev
 ├── src/g1_perception/             # pakiet ament_python
-│   ├── config/                    # rois.yaml, hsv.yaml (narzędzia), labels.yaml, params.yaml
+│   ├── config/                    # rois, labels, params.yaml + params_{laptop,robot}.yaml
 │   ├── launch/perception.launch.py
+├── deploy/                        # requirements-robot.txt, constraints.txt (numpy<2)
+├── docs/robot.md                  # Jetson Orin NX / Humble / ONNX CPU
 │   ├── g1_perception/
 │   │   ├── core/
 │   │   │   ├── types.py
@@ -172,7 +174,14 @@ Uwagi:
 - `params.yaml` jest instalowany do `share/g1_perception/config/`; po zmianie w `src/` z `--symlink-install` działa od razu.
 - Bez GPU (devcontainer na CPU) YOLO daje ~2–5 Hz; `publish_rate_hz` to górny limit.
 
-### Parametry (`config/params.yaml`)
+### Parametry (`config/params_*.yaml`)
+
+Te same klucze w trzech plikach: `params.yaml` (domyślny launch), `params_laptop.yaml` (`.pt` / `.onnx`), `params_robot.yaml` (`.onnx`, `device: cpu`). Wdrożenie na G1/PC2: [docs/robot.md](docs/robot.md), zależności `deploy/requirements-robot.txt`.
+
+```bash
+ros2 launch g1_perception perception.launch.py \
+  params_file:=$(ros2 pkg prefix g1_perception)/share/g1_perception/config/params_laptop.yaml
+```
 
 | Grupa | Parametry |
 |-------|-----------|

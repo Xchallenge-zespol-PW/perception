@@ -1,6 +1,8 @@
-# Parameters for g1_perception/perception_node (defaults mirror node_config.DEFAULT_PARAMS).
-# Empty strings = package defaults (config/rois.yaml, hsv.yaml, labels.yaml; auto device).
-# Relative paths are resolved against the working directory of the launch.
+# Default / legacy params (same keys as params_laptop.yaml and params_robot.yaml).
+# Prefer environment-specific files:
+#   config/params_laptop.yaml  — .pt or .onnx on the laptop / devcontainer
+#   config/params_robot.yaml   — .onnx (imgsz 640), device=cpu on G1/PC2
+# See docs/robot.md. Empty strings = package defaults; paths relative to cwd.
 perception_node:
   ros__parameters:
     # Inputs (RealSense, aligned depth in 16UC1 mm)
