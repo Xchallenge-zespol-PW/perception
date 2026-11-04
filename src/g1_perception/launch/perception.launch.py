@@ -26,11 +26,14 @@ def _launch_setup(context, *args, **kwargs):
         {'use_sim_time': ParameterValue(use_sim_time, value_type=bool)},
     ]
 
-    # Optional override (ros2 launch … model_path:=/ws/models/foo.onnx).
+    # Optional overrides (ros2 launch … model_path:=… rois_mode:=none).
     # Empty default keeps the value from the YAML params file.
     model_path = LaunchConfiguration('model_path').perform(context).strip()
     if model_path:
         parameters.append({'model_path': model_path})
+    rois_mode = LaunchConfiguration('rois_mode').perform(context).strip()
+    if rois_mode:
+        parameters.append({'rois_mode': rois_mode})
 
     return [
         Node(
@@ -64,6 +67,14 @@ def generate_launch_description():
             description=(
                 'Override perception_node model_path from the YAML '
                 '(e.g. model_path:=/ws/models/cubes_seg.onnx)'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'rois_mode',
+            default_value='',
+            description=(
+                'Override rois_mode from the YAML '
+                '(none = free YOLO+tracker; image_roi = fixed ROIs)'
             ),
         ),
         OpaqueFunction(function=_launch_setup),

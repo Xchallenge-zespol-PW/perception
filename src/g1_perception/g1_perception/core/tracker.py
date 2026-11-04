@@ -17,6 +17,7 @@ class _Track:
     missed: int = 0
     last_detection: Detection | None = None
     last_position: np.ndarray | None = None
+    last_pose: Pose | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ class CubeTracker:
             track = self._tracks[tid]
             track.missed = 0
             track.last_detection = obs.detection
+            track.last_pose = obs.pose
             track.last_position = np.asarray(
                 obs.pose.position, dtype=np.float64
             ).copy()
@@ -128,6 +130,7 @@ class CubeTracker:
                 track_id=tid,
                 missed=0,
                 last_detection=obs.detection,
+                last_pose=obs.pose,
                 last_position=np.asarray(
                     obs.pose.position, dtype=np.float64
                 ).copy(),
@@ -162,13 +165,16 @@ class CubeTracker:
             v = voted.get(tid)
             if v is None:
                 continue
+            # Until the vote window fills, VotedSlot.pose is None — keep the
+            # last measured pose so slot_assign still sees the cube.
+            pose = v.pose if v.pose is not None else tr.last_pose
             out.append(
                 TrackedCube(
                     track_id=tid,
                     label=v.label,
                     score=v.score,
                     n_frames=v.n_frames,
-                    pose=v.pose,
+                    pose=pose,
                     yaw_deg=v.yaw_deg,
                     yaw_consistency=v.yaw_consistency,
                     detection=tr.last_detection,

@@ -26,7 +26,7 @@ perception_node:
     device: ""
     conf: 0.25
     verify_hsv: false
-    rois_mode: image_roi
+    rois_mode: none
     rois_path: ""
     hsv_path: ""
     labels_path: ""
@@ -43,7 +43,7 @@ perception_node:
     vote_min_frames: 0
     match_dist_m: 0.03
     max_missed: 5
-    slot_axis: y
+    slot_axis: "y"
     expected_count: 4
     max_line_deviation_m: 0.03
     min_spacing_m: 0.04

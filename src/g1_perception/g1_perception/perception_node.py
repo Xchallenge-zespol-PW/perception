@@ -245,6 +245,8 @@ class PerceptionNode(Node):
 
         if self._free:
             assert self._tracker is not None
+            n_det = len(results)
+            n_pose = sum(1 for r in results if r.pose is not None)
             tracked = self._tracker.update(results)
             tracked_tf, frame_id = self._tracks_to_target(
                 tracked, camera_header
@@ -257,7 +259,8 @@ class PerceptionNode(Node):
             if not assignment.valid:
                 self.get_logger().warning(
                     'slot assignment invalid '
-                    f'(n={len(tracked_tf)}, expected='
+                    f'(det={n_det} with_pose={n_pose} '
+                    f'tracks={len(tracked_tf)}, expected='
                     f'{self._assign_kw["expected_count"]}); '
                     'publishing track ids as uncertain',
                     throttle_duration_sec=2.0,
