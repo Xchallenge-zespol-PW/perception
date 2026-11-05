@@ -39,7 +39,7 @@ Frame (RGB + depth + K)
 | `perception_node` | cienki węzeł rclpy (sync, cv_bridge, TF, publikacja) |
 | `tools/` | nagranie → klatki → kalibracja → autolabel → trenowanie |
 
-Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuje ROS. Planowane: `evaluate`, FoundationPose, eksport TensorRT (`.engine` już obsługiwany w loaderze).
+Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuje ROS. Planowane: segmenter `yolo_pose` + estymator `pnp` z publikacją TF `cube_N` (konwencje: [docs/pose_pnp.md](docs/pose_pnp.md)), `evaluate`, eksport TensorRT (`.engine` już obsługiwany w loaderze). FoundationPose odpada na robocie (JetPack 5.1.1, patrz [docs/robot.md](docs/robot.md)).
 
 ## Struktura repo
 
