@@ -47,6 +47,8 @@ def test_yolo_geometric_config_from_defaults():
         'params': {
             'model_path': DEFAULT_PARAMS['model_path'],
             'device': '0',
+            'fallback_device': 'cpu',
+            'warmup_runs': 2,
             'conf': 0.25,
             'verify_hsv': True,
         },
@@ -82,6 +84,19 @@ def test_paths_forwarded_when_set():
 
     assert config['rois_path'] == 'r.yaml'
     assert config['labels_path'] == 'l.yaml'
+
+
+def test_fallback_model_forwarded_when_set():
+    config = build_pipeline_config(_params(
+        model_path='/ws/models/cubes_seg.engine',
+        device='0',
+        fallback_model_path='/ws/models/cubes_seg.onnx',
+        warmup_runs=0,
+    ))
+    params = config['segmenter']['params']
+    assert params['fallback_model_path'] == '/ws/models/cubes_seg.onnx'
+    assert params['fallback_device'] == 'cpu'
+    assert params['warmup_runs'] == 0
 
 
 def test_voter_kwargs_min_frames_zero_means_window():

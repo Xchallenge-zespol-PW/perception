@@ -97,6 +97,18 @@ class Pipeline:
         """Return ``none`` or ``image_roi``."""
         return self._rois_mode
 
+    @property
+    def backend_label(self) -> str | None:
+        """Segmenter inference backend (e.g. ``engine:0``), if it has one."""
+        backend = getattr(self._segmenter, 'backend', None)
+        return backend.describe() if backend is not None else None
+
+    def load(self) -> None:
+        """Load segmenter models eagerly instead of on the first frame."""
+        load = getattr(self._segmenter, 'load', None)
+        if callable(load):
+            load()
+
     @classmethod
     def from_config(
         cls,

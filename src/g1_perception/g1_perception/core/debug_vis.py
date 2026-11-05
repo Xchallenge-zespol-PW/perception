@@ -46,6 +46,7 @@ def draw_debug(
     voted: Sequence[VotedSlot],
     *,
     inference_ms: float | None = None,
+    backend: str | None = None,
 ) -> NDArray[np.uint8]:
     """
     Render a debug RGB image.
@@ -54,7 +55,8 @@ def draw_debug(
     boxes and text use the voted label. Without ROIs, each result with a
     mask shows ``id:colour status`` (and yaw) at the mask centroid —
     pass ``results`` whose ``slot`` is already the place / track id.
-    Optional ``inference_ms`` is drawn in the top-left corner.
+    Optional ``inference_ms`` and ``backend`` (e.g. ``engine:0``) are drawn
+    in the top-left corner.
     """
     out = rgb.copy()
     for result in results:
@@ -71,10 +73,16 @@ def draw_debug(
     else:
         _draw_free_labels(out, results, voted)
 
-    if inference_ms is not None:
+    status = ' '.join(
+        part for part in (
+            f'{inference_ms:.0f} ms' if inference_ms is not None else None,
+            backend,
+        ) if part
+    )
+    if status:
         cv2.putText(
             out,
-            f'{inference_ms:.0f} ms',
+            status,
             (8, 20),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,

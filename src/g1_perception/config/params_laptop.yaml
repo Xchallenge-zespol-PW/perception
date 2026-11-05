@@ -1,4 +1,5 @@
-# Laptop / devcontainer: RealSense (D455 or D435i), YOLO .pt or .onnx.
+# Laptop / devcontainer: RealSense (D455 or D435i), YOLO .pt or .onnx on CPU
+# (no CUDA on the laptop's AMD GPU; the devcontainer has no GPU either).
 # Same keys as params_robot.yaml. Launch:
 #   ros2 launch g1_perception perception.launch.py config:=params_laptop.yaml
 # Relative model_path is resolved against the process cwd (use /ws or humble_ws).
@@ -21,9 +22,12 @@ perception_node:
     # Pipeline
     segmenter: yolo_seg
     pose_estimator: geometric
-    # Prefer .pt on laptop with CUDA; .onnx (imgsz 640) also works via Ultralytics.
+    # .pt or .onnx (imgsz 640); device: "0" only on a machine with CUDA.
     model_path: runs/segment/runs/seg/cubes-2/weights/best.pt
-    device: ""
+    device: cpu
+    fallback_model_path: ""
+    fallback_device: cpu
+    warmup_runs: 1
     conf: 0.25
     verify_hsv: false
     rois_mode: none

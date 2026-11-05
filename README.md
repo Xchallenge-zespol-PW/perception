@@ -52,7 +52,7 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 │   ├── config/                    # rois, labels, params_{laptop,robot}.yaml
 │   ├── launch/perception.launch.py  # config:=params_laptop.yaml (domyślnie)
 ├── deploy/                        # requirements-robot.txt, constraints.txt (numpy<2)
-├── docs/robot.md                  # Jetson Orin NX / Humble / ONNX CPU
+├── docs/robot.md                  # Jetson Orin NX / Humble / TensorRT GPU + ONNX CPU
 │   ├── g1_perception/
 │   │   ├── core/
 │   │   │   ├── types.py
@@ -137,7 +137,7 @@ Nie instaluj `pytest>=7` przez `pip --user` — gryzie się z pluginami ROS (`la
 
 ## Węzeł ROS 2 (`perception_node`)
 
-Kamera ~15 kl/s, inferencja ~125 ms (~8 kl/s): callback synchronizatora zapisuje **tylko najnowszy** zestaw (kolor + głębia + `camera_info`, QoS sensor data). Osobny wątek bierze ten zestaw, buduje `Frame` (rgb8→RGB; YOLO wewnątrz robi BGR; 16UC1 mm→float32 m), woła `Pipeline.process` + `SlotVoter`. Klatki, które przyszły w trakcie inferencji, są **pomijane** (brak kolejki = brak narastającego opóźnienia). Publikacja `/perception/cubes`, maski i debugu idzie z timerem `publish_rate_hz`. Co 10 s log: średni czas inferencji [ms] i liczba pominiętych klatek. Przed Ultralytics ustawiane jest `YOLO_AUTOINSTALL=false`.
+Kamera ~15 kl/s, inferencja na CPU ~125 ms (~8 kl/s): callback synchronizatora zapisuje **tylko najnowszy** zestaw (kolor + głębia + `camera_info`, QoS sensor data). Osobny wątek bierze ten zestaw, buduje `Frame` (rgb8→RGB; YOLO wewnątrz robi BGR; 16UC1 mm→float32 m), woła `Pipeline.process` + `SlotVoter`. Klatki, które przyszły w trakcie inferencji, są **pomijane** (brak kolejki = brak narastającego opóźnienia). Publikacja `/perception/cubes`, maski i debugu idzie z timerem `publish_rate_hz`. Model jest ładowany i rozgrzewany przy starcie węzła (z fallbackiem na CPU, patrz niżej). Co 10 s log: średni czas inferencji [ms], liczba pominiętych klatek i aktywny backend. Przed Ultralytics ustawiane jest `YOLO_AUTOINSTALL=false`.
 
 ### Uruchomienie na bagu
 
@@ -175,21 +175,24 @@ Uwagi:
 - `--loop` cofa znaczniki czasu — zostaw `use_sim_time:=false`. `use_sim_time:=true` tylko z `ros2 bag play --clock` bez `--loop`.
 - `rois.yaml` / `rois_path` muszą pasować do kadru. ROI w pikselach wymagają stałej pozycji kamery względem stołu.
 - `config/*.yaml` instalują się do `share/g1_perception/config/` (`setup.py` glob).
-- Na robocie ONNX CPU ~124 ms/klatkę; `skipped_frames` w logu co 10 s pokazuje, ile klatek 15 Hz odrzucono.
+- Na robocie domyślnie TensorRT na GPU; na fallbacku ONNX CPU ~124 ms/klatkę. `skipped_frames` w logu co 10 s pokazuje, ile klatek 15 Hz odrzucono.
 
 ### Parametry (`config/params_*.yaml`)
 
-Te same klucze: `params_laptop.yaml` (`.pt` / `.onnx`), `params_robot.yaml` (`.onnx`, `device: cpu`). Wdrożenie G1/PC2: [docs/robot.md](docs/robot.md), `deploy/requirements-robot.txt`.
+Te same klucze: `params_laptop.yaml` (`.pt` / `.onnx`, `device: cpu`), `params_robot.yaml` (`.engine`, `device: "0"`, fallback `.onnx` na CPU). Wdrożenie G1/PC2: [docs/robot.md](docs/robot.md), `deploy/requirements-robot.txt`.
 
 ```bash
 ros2 launch g1_perception perception.launch.py config:=params_laptop.yaml
+# robot, wymuszenie CPU bez edycji YAML:
+ros2 launch g1_perception perception.launch.py config:=params_robot.yaml \
+  model_path:=/ws/models/cubes_seg.onnx device:=cpu
 ```
 
 | Grupa | Parametry |
 |-------|-----------|
 | Wejście | `color_topic`, `depth_topic` (aligned, `16UC1` mm lub `32FC1` m), `camera_info_topic`, `sync_queue_size`, `sync_slop_s` |
 | Wyjście | `output_topic` (`/perception/cubes`), `debug_image_topic`, `mask_topic`, `target_frame` (`""` = ramka kamery), `tf_timeout_s` |
-| Pipeline | `segmenter` (`yolo_seg` \| `hsv`), `pose_estimator` (`geometric` \| `centroid`), `model_path`, `device`, `conf`, `verify_hsv`, `rois_mode` (`none` \| `image_roi`), `rois_path` / `hsv_path` / `labels_path` (`""` = domyślne; w `none` brak pliku ROI nie jest błędem) |
+| Pipeline | `segmenter` (`yolo_seg` \| `hsv`), `pose_estimator` (`geometric` \| `centroid`), `model_path`, `device`, `fallback_model_path` / `fallback_device` (gdy `model_path` nie ruszy na `device`), `warmup_runs` (predykcje na pustym obrazie przy starcie), `conf`, `verify_hsv`, `rois_mode` (`none` \| `image_roi`), `rois_path` / `hsv_path` / `labels_path` (`""` = domyślne; w `none` brak pliku ROI nie jest błędem) |
 | Poza | `cube_size_m`, `margin_px`, `z_min_m`, `z_max_m` (≤ 0 wyłącza) |
 | Głosowanie / tracking | `vote_window`, `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`), `match_dist_m`, `max_missed` |
 | Miejsca (`rois_mode=none`) | `slot_axis` (`y` = L→P na robocie), `expected_count`, `max_line_deviation_m`, `min_spacing_m`, `max_spacing_m` |
@@ -443,7 +446,7 @@ Per slot w oknie ostatnich `window` klatek:
 | Nazwa | Moduł | Zachowanie |
 |-------|-------|------------|
 | `hsv` | `segmenters/hsv.py` | Per ROI: maski HSV red/green, erozja, odsetek ≥ `min_frac` → `red`/`green`; poniżej progu brak detekcji (→ `empty`) |
-| `yolo_seg` | `segmenters/yolo_seg.py` | YOLO-seg (`.pt`/`.engine`), `retina_masks=True`, slot gdy pokrycie maski z ROI > 50%; zachowuje nazwę klasy z modelu; opcjonalnie `verify_hsv` (niezgodność z HSV → `uncertain`) |
+| `yolo_seg` | `segmenters/yolo_seg.py` | YOLO-seg (`.pt`/`.onnx`/`.engine`, ładowanie przez `segmenters/yolo_backend.py` z fallbackiem CPU), `retina_masks=True`, slot gdy pokrycie maski z ROI > 50%; zachowuje nazwę klasy z modelu; opcjonalnie `verify_hsv` (niezgodność z HSV → `uncertain`) |
 
 Import `ultralytics` tylko wewnątrz `YoloSegSegmenter` (opcjonalna zależność).
 

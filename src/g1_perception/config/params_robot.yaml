@@ -1,8 +1,9 @@
-# Unitree G1 / PC2 (Jetson Orin NX): RealSense D435i in head, ONNX on CPU.
+# Unitree G1 / PC2 (Jetson Orin NX): RealSense D435i in head, TensorRT on GPU.
 # Same keys as params_laptop.yaml. Launch inside the humble container:
 #   ros2 launch g1_perception perception.launch.py config:=params_robot.yaml
-# Absolute model_path: deploy_robot.sh copies .onnx to ~/humble_ws/models/
-# (= /ws/models/ in the container). Override: model_path:=/ws/models/other.onnx
+# deploy_robot.sh copies .pt / .onnx to ~/humble_ws/models/ (= /ws/models/ in
+# the container); the .engine is built on the Jetson (docs/robot.md).
+# Force CPU: model_path:=/ws/models/cubes_seg.onnx device:=cpu
 perception_node:
   ros__parameters:
     # Inputs (D435i, rgb8 + aligned depth 16UC1 mm)
@@ -20,11 +21,15 @@ perception_node:
     target_frame: camera_link
     tf_timeout_s: 0.1
 
-    # Pipeline (ONNX Runtime CPU via Ultralytics; no CUDA in the humble container)
+    # Pipeline: TensorRT engine on the GPU; if it cannot load (no CUDA, bad
+    # engine), the node falls back to ONNX on CPU and logs a warning.
     segmenter: yolo_seg
     pose_estimator: geometric
-    model_path: /ws/models/cubes_seg.onnx
-    device: cpu
+    model_path: /ws/models/cubes_seg.engine
+    device: "0"
+    fallback_model_path: /ws/models/cubes_seg.onnx
+    fallback_device: cpu
+    warmup_runs: 2
     conf: 0.25
     verify_hsv: false
     # Free detections + 3D tracker + place assignment (no image ROIs).
@@ -39,7 +44,7 @@ perception_node:
     z_min_m: 0.1
     z_max_m: 2.0
 
-    # Multi-frame voting / tracking (~124 ms/frame ONNX)
+    # Multi-frame voting / tracking (window in frames; ~124 ms/frame on CPU)
     vote_window: 10
     vote_min_ratio: 0.7
     vote_min_frames: 0
