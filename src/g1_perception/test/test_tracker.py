@@ -73,7 +73,6 @@ def test_two_close_cubes_keep_separate_ids():
     ids_a = ids_b = None
     for _ in range(5):
         tracked = tracker.update([_obs(*a), _obs(*b)])
-        by_label = {t.label: t.track_id for t in tracked}
         # May be uncertain until vote settles; match by position instead.
         by_y = {
             round(float(t.pose.position[0]), 3): t.track_id

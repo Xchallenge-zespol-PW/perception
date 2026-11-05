@@ -113,7 +113,7 @@ def _validate(
 
 
 def _line_ok(points: np.ndarray, max_dev: float) -> bool:
-    """True if every point lies within ``max_dev`` of the best-fit 3D line."""
+    """Check that every point lies within ``max_dev`` of the best-fit 3D line."""
     if points.shape[0] < 2:
         return True
     centroid = points.mean(axis=0)
