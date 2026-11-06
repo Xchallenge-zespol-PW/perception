@@ -126,10 +126,11 @@ Te same klucze parametrów — różnią się wartościami pod środowisko.
 ## Checklist przed startem na robocie
 
 1. `ROS_DOMAIN_ID=0`, CycloneDDS, kamera publikuje trzy topici przy 640×480×15.  
-2. `YOLO_AUTOINSTALL=false`, `numpy` 1.x, `cv_bridge` + `onnxruntime` importują się; `python3 src/perception/tools/jetson_gpu_check.py` bez `FAIL` (TensorRT na GPU; torch z CUDA niepotrzebny).  
-3. `/ws/models/cubes_seg.engine` (zbudowany na tym Jetsonie) i `/ws/models/cubes_seg.onnx` (imgsz 640) na miejscu.  
-4. `colcon build` bez błędów + `source /ws/install/setup.bash`.  
-5. Launch z `params_robot.yaml`; w logu `Inference backend engine:0` (nie `… fallback`); `/perception/cubes` i opcjonalnie debug image.
+2. Paczki ROS z `apt`: `ros-humble-vision-msgs` (wiadomości `/perception/cubes`) i `ros-humble-rosbag2-storage-mcap` (nagrania MCAP) — w kontenerze humble wpisane na stałe w `~/g1_humble/paczki-apt.txt`, bo `rebuild` usuwa ręczne instalacje.  
+3. `YOLO_AUTOINSTALL=false`, `numpy` 1.x, `cv_bridge` + `onnxruntime` importują się; `python3 src/perception/tools/jetson_gpu_check.py` bez `FAIL` (TensorRT na GPU; torch z CUDA niepotrzebny).  
+4. `/ws/models/cubes_seg.engine` (zbudowany na tym Jetsonie) i `/ws/models/cubes_seg.onnx` (imgsz 640) na miejscu.  
+5. `colcon build` bez błędów + `source /ws/install/setup.bash`.  
+6. Launch z `params_robot.yaml`; w logu `Inference backend engine:0` (nie `… fallback`); `/perception/cubes` i opcjonalnie debug image.
 
 ## Wyniki testów na robocie
 
