@@ -30,6 +30,7 @@ Frame (RGB + depth + K)
 | `core.dataset` | `load_frame` z `data/index.csv` |
 | `core.geometry` | deprojekcja, RANSAC płaszczyzny, poza kostki, `transform_pose` |
 | `core.keypoints` | kanoniczna kolejność 4 narożników górnej ściany (`c0..c3`) |
+| `core.pnp` | poza górnej ściany z 4 narożników (IPPE_SQUARE), wybór rozwiązania po normalnej stołu, yaw na stole, środek bryły |
 | `core.frame_utils` | głębia mm → m, `K` z `camera_info` |
 | `core.debug_vis` | obraz debug (ROI / id tracka, maski, etykiety, yaw), suma masek mono8 |
 | `pipeline` | `@register`, `Pipeline.from_config` / `process` (`rois_mode`) |
