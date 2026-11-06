@@ -48,11 +48,16 @@ perception_node:
     pnp_max_normal_deg: 20.0      # max top-face tilt vs table normal
     pnp_fallback: geometric       # geometric | none
 
-    # Multi-frame voting / tracking (used when rois_mode=none)
-    vote_window: 10
+    # Multi-frame voting / tracking over a time window, so laptop CPU and the
+    # robot GPU give the same decisions. vote_window caps votes per cube;
+    # vote_window_s: 0 / max_missed_s: 0 = old frame window.
+    vote_window_s: 2.0
+    vote_min_votes: 5
+    vote_window: 100
     vote_min_ratio: 0.7
     vote_min_frames: 0
     match_dist_m: 0.03
+    max_missed_s: 1.0
     max_missed: 5
     slot_axis: "y"
     expected_count: 4

@@ -24,7 +24,7 @@ Frame (RGB + depth + K)
 | `core.types` | `Frame`, `Detection`, `Pose`, `SlotResult`, stałe etykiet, protokoły |
 | `core.config` | ROI / HSV / mapa etykiet z YAML |
 | `core.labels` | `canonical_label` (nazwa z modelu → etykieta kanoniczna) |
-| `core.voting` | `SlotVoter`: głosowanie po oknie N klatek per slot |
+| `core.voting` | `SlotVoter`: głosowanie per slot w oknie czasowym (sekundy) albo N klatek |
 | `core.tracker` | śledzenie 3D (najbliższy sąsiad) + głosowanie per track |
 | `core.slot_assign` | numery miejsc 1..N wzdłuż osi + walidacja linii/odstępów |
 | `core.dataset` | `load_frame` z `data/index.csv` |
@@ -202,7 +202,7 @@ ros2 launch g1_perception perception.launch.py config:=params_robot.yaml \
 | Pipeline | `segmenter` (`yolo_seg` \| `hsv`), `pose_estimator` (`geometric` \| `centroid` \| `pnp`), `model_path`, `device`, `fallback_model_path` / `fallback_device` (gdy `model_path` nie ruszy na `device`), `warmup_runs` (predykcje na pustym obrazie przy starcie), `conf`, `verify_hsv`, `rois_mode` (`none` \| `image_roi`), `rois_path` / `hsv_path` / `labels_path` (`""` = domyślne; w `none` brak pliku ROI nie jest błędem) |
 | Poza | `cube_size_m`, `margin_px`, `z_min_m`, `z_max_m` (≤ 0 wyłącza) |
 | PnP (`pose_estimator: pnp`) | `kpt_min_conf`, `pnp_max_reproj_px`, `pnp_max_depth_diff_m` (przy `pnp_depth_diff_ref_m`, dalej × (z / ref)²), `pnp_max_normal_deg`, `pnp_fallback` (`geometric` \| `none`) |
-| Głosowanie / tracking | `vote_window`, `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`), `match_dist_m`, `max_missed` |
+| Głosowanie / tracking | `vote_window_s` (> 0 = okno czasowe w sekundach stempli klatek; 0 = okno klatek), `vote_min_votes` (min. głosów w oknie czasowym), `vote_window` (okno klatek; w trybie czasowym limit głosów), `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`), `match_dist_m`, `max_missed_s` (> 0 = track znika po tylu sekundach bez detekcji) / `max_missed` (klatki) |
 | Miejsca (`rois_mode=none`) | `slot_axis` (`y` = L→P na robocie), `expected_count`, `max_line_deviation_m`, `min_spacing_m`, `max_spacing_m` |
 | Tempo | `publish_rate_hz` |
 
@@ -444,9 +444,13 @@ from g1_perception.core.voting import SlotVoter
 voter = SlotVoter(window=10, min_ratio=0.7)  # min_frames domyślnie = window
 for frame in frames:
     voted = voter.update(pipe.process(frame))  # list[VotedSlot], po slot
+
+# okno czasowe: te same decyzje przy 1 i 20 kl/s
+voter = SlotVoter(window=100, min_ratio=0.7, window_s=2.0, min_votes=5)
+voted = voter.update(pipe.process(frame), frame.stamp)
 ```
 
-Per slot w oknie ostatnich `window` klatek:
+Per slot w oknie ostatnich `window` klatek albo, z `window_s`, głosów ze stemplem nie starszym niż `window_s` od najnowszej klatki (wymaga `min_votes`; stempel cofnięty, np. `ros2 bag play --loop`, czyści historię):
 
 - etykieta = większość; `uncertain`, gdy udział < `min_ratio`, remis, za mało klatek (< `min_frames`) albo wygrywa `uncertain`; klatki `uncertain` liczą się do mianownika;
 - dla `red` / `green`: pozycja = mediana per oś z klatek zgodnych z wynikiem; yaw = mediana z symetrią 90° (średnia kołowa `4·yaw` jako punkt odniesienia, odchyłki zawijane do ±45°, mediana); oś Z = średnia normalna stołu;

@@ -10,9 +10,11 @@ import pytest
 from g1_perception.core.config import Roi
 from g1_perception.core.types import LABEL_GREEN, LABEL_RED, Frame
 from g1_perception.core.voting import SlotVoter
+from g1_perception.core.tracker import CubeTracker
 from g1_perception.node_config import (
     DEFAULT_PARAMS,
     build_pipeline_config,
+    tracker_kwargs,
     voter_kwargs,
 )
 from g1_perception.pipeline import Pipeline, clear_registry, register
@@ -117,9 +119,23 @@ def test_voter_kwargs_min_frames_zero_means_window():
         'window': 7,
         'min_ratio': 0.7,
         'min_frames': None,
+        'window_s': None,
+        'min_votes': 1,
     }
     assert voter_kwargs(_params(vote_min_frames=4))['min_frames'] == 4
     SlotVoter(**voter_kwargs(_params()))
+
+
+def test_time_window_params_reach_voter_and_tracker():
+    params = _params(
+        vote_window_s=2.0, vote_min_votes=5, vote_window=100, max_missed_s=1.0
+    )
+    vk = voter_kwargs(params)
+    assert vk['window_s'] == 2.0 and vk['min_votes'] == 5
+    SlotVoter(**vk)
+    tk = tracker_kwargs(params)
+    assert tk['vote_window_s'] == 2.0 and tk['max_missed_s'] == 1.0
+    CubeTracker(**tk)
 
 
 def test_built_config_runs_hsv_pipeline(tmp_path: Path):

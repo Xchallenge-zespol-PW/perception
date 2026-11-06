@@ -257,7 +257,7 @@ class PerceptionNode(Node):
             assert self._tracker is not None
             n_det = len(results)
             n_pose = sum(1 for r in results if r.pose is not None)
-            tracked = self._tracker.update(results)
+            tracked = self._tracker.update(results, frame.stamp)
             tracked_tf, frame_id = self._tracks_to_target(
                 tracked, camera_header
             )
@@ -276,7 +276,7 @@ class PerceptionNode(Node):
                     throttle_duration_sec=2.0,
                 )
         else:
-            voted_cam = self._voter.update(results)
+            voted_cam = self._voter.update(results, frame.stamp)
             voted, frame_id = self._voted_to_target(voted_cam, camera_header)
             debug_results = results
 

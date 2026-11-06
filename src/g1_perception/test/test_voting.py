@@ -274,8 +274,56 @@ def test_reset_clears_history():
         {'min_ratio': 1.5},
         {'window': 5, 'min_frames': 6},
         {'window': 5, 'min_frames': 0},
+        {'window_s': 0.0},
+        {'window': 5, 'min_votes': 6},
     ],
 )
 def test_invalid_parameters_raise(kwargs):
     with pytest.raises(ValueError):
         SlotVoter(**kwargs)
+
+
+def _timed_frames(fps: float, duration_s: float, label_at):
+    """``(stamp, [SlotResult])`` for one slot at ``fps`` over ``duration_s``."""
+    n = int(round(fps * duration_s))
+    return [(i / fps, [_result(label_at(i / fps))]) for i in range(n)]
+
+
+@pytest.mark.parametrize('fps', [1.0, 20.0])
+def test_time_window_same_decision_at_1_and_20_fps(fps):
+    # Green for 6 s, then red: after 10 s a 3 s window holds only red.
+    def label_at(t):
+        return LABEL_GREEN if t < 6.0 else LABEL_RED
+
+    voter = SlotVoter(window=100, min_ratio=0.7, window_s=3.0, min_votes=3)
+    decisions = {}
+    for stamp, frame in _timed_frames(fps, 10.0, label_at):
+        out = voter.update(frame, stamp)
+        decisions[round(stamp)] = out[0].label
+    assert decisions[5] == LABEL_GREEN
+    assert decisions[7] == LABEL_UNCERTAIN  # window mixes green and red
+    assert decisions[9] == LABEL_RED
+
+
+def test_time_window_needs_min_votes():
+    voter = SlotVoter(window=100, min_ratio=0.7, window_s=2.0, min_votes=5)
+    for i in range(4):
+        out = voter.update([_result(LABEL_RED)], float(i))
+    assert out[0].label == LABEL_UNCERTAIN  # 1 s apart: only 3 votes in 2 s
+
+
+def test_time_window_drops_old_votes_and_requires_stamp():
+    voter = SlotVoter(window=100, min_ratio=0.6, window_s=1.0, min_votes=1)
+    voter.update([_result(LABEL_RED)], 0.0)
+    out = voter.update([_result(LABEL_GREEN)], 5.0)
+    assert out[0].label == LABEL_GREEN and out[0].n_frames == 1
+    with pytest.raises(ValueError, match='stamp'):
+        voter.update([_result(LABEL_RED)])
+
+
+def test_time_going_backwards_resets_history():
+    voter = SlotVoter(window=100, min_ratio=0.6, window_s=5.0, min_votes=1)
+    for t in (10.0, 10.5, 11.0):
+        voter.update([_result(LABEL_RED)], t)
+    out = voter.update([_result(LABEL_GREEN)], 0.2)  # bag --loop restart
+    assert out[0].label == LABEL_GREEN and out[0].n_frames == 1
