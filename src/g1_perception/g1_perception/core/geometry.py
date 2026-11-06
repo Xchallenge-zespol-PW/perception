@@ -282,7 +282,7 @@ def transform_pose(
 
     The transform maps source-frame coordinates to the target frame
     (``p_target = R p_source + t``), as returned by a TF lookup of
-    ``target <- source``. ``score`` is kept.
+    ``target <- source``. ``score`` and ``method`` are kept.
     """
     R_t = quat_to_rotation_matrix(rotation_xyzw)
     position = R_t @ np.asarray(pose.position, dtype=np.float64)
@@ -292,6 +292,7 @@ def transform_pose(
         position=position,
         quat=rotation_matrix_to_quat_xyzw(R),
         score=pose.score,
+        method=pose.method,
     )
 
 

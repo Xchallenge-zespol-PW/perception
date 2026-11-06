@@ -199,8 +199,9 @@ ros2 launch g1_perception perception.launch.py config:=params_robot.yaml \
 |-------|-----------|
 | Wejście | `color_topic`, `depth_topic` (aligned, `16UC1` mm lub `32FC1` m), `camera_info_topic`, `sync_queue_size`, `sync_slop_s` |
 | Wyjście | `output_topic` (`/perception/cubes`), `debug_image_topic`, `mask_topic`, `target_frame` (`""` = ramka kamery), `tf_timeout_s` |
-| Pipeline | `segmenter` (`yolo_seg` \| `hsv`), `pose_estimator` (`geometric` \| `centroid`), `model_path`, `device`, `fallback_model_path` / `fallback_device` (gdy `model_path` nie ruszy na `device`), `warmup_runs` (predykcje na pustym obrazie przy starcie), `conf`, `verify_hsv`, `rois_mode` (`none` \| `image_roi`), `rois_path` / `hsv_path` / `labels_path` (`""` = domyślne; w `none` brak pliku ROI nie jest błędem) |
+| Pipeline | `segmenter` (`yolo_seg` \| `hsv`), `pose_estimator` (`geometric` \| `centroid` \| `pnp`), `model_path`, `device`, `fallback_model_path` / `fallback_device` (gdy `model_path` nie ruszy na `device`), `warmup_runs` (predykcje na pustym obrazie przy starcie), `conf`, `verify_hsv`, `rois_mode` (`none` \| `image_roi`), `rois_path` / `hsv_path` / `labels_path` (`""` = domyślne; w `none` brak pliku ROI nie jest błędem) |
 | Poza | `cube_size_m`, `margin_px`, `z_min_m`, `z_max_m` (≤ 0 wyłącza) |
+| PnP (`pose_estimator: pnp`) | `kpt_min_conf`, `pnp_max_reproj_px`, `pnp_max_depth_diff_m` (przy `pnp_depth_diff_ref_m`, dalej × (z / ref)²), `pnp_max_normal_deg`, `pnp_fallback` (`geometric` \| `none`) |
 | Głosowanie / tracking | `vote_window`, `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`), `match_dist_m`, `max_missed` |
 | Miejsca (`rois_mode=none`) | `slot_axis` (`y` = L→P na robocie), `expected_count`, `max_line_deviation_m`, `min_spacing_m`, `max_spacing_m` |
 | Tempo | `publish_rate_hz` |
@@ -365,7 +366,7 @@ Pełny przepływ danych i modeli (CVAT → datasety → trening → eksport → 
 |-----|------|
 | `Frame` | `rgb` HxWx3 uint8, `depth_m` HxW float32, `K` 3×3, `stamp` |
 | `Detection` | `slot`, `label` (surowa nazwa z segmentera), `score`, `mask` HxW bool, opcjonalnie `keypoints` Kx3 `(u, v, conf)` (narożniki `c0..c3` z `yolo_pose`) |
-| `Pose` | `position` (3,), `quat` xyzw (4,), `score` |
+| `Pose` | `position` (3,), `quat` xyzw (4,), `score`, opcjonalnie `method` (`pnp` \| `fallback:<powód>`) |
 | `SlotResult` | `slot`, `label` (kanoniczna), `score`, `detection \| None`, `pose \| None` |
 | `Segmenter` | `segment(frame) -> list[Detection]` |
 | `PoseEstimator` | `estimate(frame, det) -> Pose \| None` |
@@ -466,6 +467,7 @@ Import `ultralytics` tylko wewnątrz `YoloSegSegmenter` (opcjonalna zależność
 |-------|-------|------------|
 | `centroid` | `pose/centroid.py` | Mediana punktów 3D; orientacja z normalnej stołu |
 | `geometric` | `pose/geometric.py` | `cube_pose_on_table` (RANSAC stołu + minAreaRect) |
+| `pnp` | `pose/pnp.py` | orientacja z 4 narożników (IPPE_SQUARE, rzut na stół), pozycja z głębi w czworokącie; odrzucenie (`no_keypoints`, `kpt_conf`, `no_table`, `no_depth`, `pnp_failed`, `reproj`, `tilt`, `depth_diff`) → `geometric` na górnej ścianie albo `None` |
 
 ---
 

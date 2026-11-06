@@ -59,12 +59,14 @@ class Pose:
     6-DoF object pose in the camera frame.
 
     ``position`` is (x, y, z) metres, ``quat`` is (x, y, z, w),
-    ``score`` is confidence in [0, 1].
+    ``score`` is confidence in [0, 1]. ``method`` optionally names how the
+    pose was obtained (``pnp`` estimator: ``pnp`` or ``fallback:<reason>``).
     """
 
     position: NDArray[np.float64]
     quat: NDArray[np.float64]
     score: float
+    method: str | None = None
 
 
 @dataclass(frozen=True)

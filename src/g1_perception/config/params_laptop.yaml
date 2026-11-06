@@ -40,6 +40,13 @@ perception_node:
     margin_px: 20
     z_min_m: 0.1
     z_max_m: 2.0
+    # pose_estimator: pnp (YOLO-pose corners; see docs/pose_pnp.md)
+    kpt_min_conf: 0.5             # min confidence of every corner
+    pnp_max_reproj_px: 2.0        # max PnP reprojection error
+    pnp_max_depth_diff_m: 0.03    # max PnP vs depth distance at pnp_depth_diff_ref_m,
+    pnp_depth_diff_ref_m: 0.6     # scaled by (z / ref)^2 farther away
+    pnp_max_normal_deg: 20.0      # max top-face tilt vs table normal
+    pnp_fallback: geometric       # geometric | none
 
     # Multi-frame voting / tracking (used when rois_mode=none)
     vote_window: 10

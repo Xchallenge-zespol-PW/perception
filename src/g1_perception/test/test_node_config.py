@@ -18,6 +18,7 @@ from g1_perception.node_config import (
 from g1_perception.pipeline import Pipeline, clear_registry, register
 from g1_perception.pose.centroid import CentroidPoseEstimator
 from g1_perception.pose.geometric import GeometricPoseEstimator
+from g1_perception.pose.pnp import PnpPoseEstimator
 from g1_perception.segmenters.hsv import HsvSegmenter
 from g1_perception.segmenters.yolo_seg import YoloSegSegmenter
 
@@ -29,6 +30,7 @@ def _registry():
     register('yolo_seg')(YoloSegSegmenter)
     register('centroid')(CentroidPoseEstimator)
     register('geometric')(GeometricPoseEstimator)
+    register('pnp')(PnpPoseEstimator)
     yield
     clear_registry()
 
@@ -97,6 +99,17 @@ def test_fallback_model_forwarded_when_set():
     assert params['fallback_model_path'] == '/ws/models/cubes_seg.onnx'
     assert params['fallback_device'] == 'cpu'
     assert params['warmup_runs'] == 0
+
+
+def test_pnp_params_forwarded_to_pnp_only():
+    config = build_pipeline_config(_params(
+        pose_estimator='pnp', pnp_fallback='none', pnp_max_reproj_px=3.0
+    ))
+    params = config['pose_estimator']['params']
+    assert params['fallback'] == 'none'
+    assert params['max_reproj_px'] == 3.0
+    assert params['kpt_min_conf'] == 0.5
+    assert params['depth_diff_ref_m'] == 0.6 and params['size'] == 0.05
 
 
 def test_voter_kwargs_min_frames_zero_means_window():

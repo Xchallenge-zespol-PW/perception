@@ -36,6 +36,12 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'margin_px': 20,
     'z_min_m': 0.1,
     'z_max_m': 2.0,
+    'kpt_min_conf': 0.5,
+    'pnp_max_reproj_px': 2.0,
+    'pnp_max_depth_diff_m': 0.03,
+    'pnp_depth_diff_ref_m': 0.6,
+    'pnp_max_normal_deg': 20.0,
+    'pnp_fallback': 'geometric',
     'vote_window': 10,
     'vote_min_ratio': 0.7,
     'vote_min_frames': 0,
@@ -78,6 +84,12 @@ def build_pipeline_config(params: Mapping[str, Any]) -> dict[str, Any]:
         'margin': int(params['margin_px']),
         'z_min': _opt_positive(params.get('z_min_m')),
         'z_max': _opt_positive(params.get('z_max_m')),
+        'kpt_min_conf': float(params['kpt_min_conf']),
+        'max_reproj_px': float(params['pnp_max_reproj_px']),
+        'max_depth_diff_m': float(params['pnp_max_depth_diff_m']),
+        'depth_diff_ref_m': float(params['pnp_depth_diff_ref_m']),
+        'max_normal_deg': float(params['pnp_max_normal_deg']),
+        'fallback': str(params['pnp_fallback']),
     }
 
     config: dict[str, Any] = {
