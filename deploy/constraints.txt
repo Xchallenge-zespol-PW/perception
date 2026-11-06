@@ -5,3 +5,6 @@ numpy<2
 # New setuptools + old packaging → canonicalize_version(strip_trailing_zero=...) TypeError.
 setuptools>=64,<80
 packaging>=22
+# One Ultralytics version on laptop, Colab and robot (YOLO26 needs >= 8.4;
+# export / engine format must match between training and the Jetson).
+ultralytics==8.4.191

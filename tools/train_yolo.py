@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
-Train a YOLO instance-segmentation model on ``datasets/cubes_seg``.
+Train a YOLO seg or pose model on the cube datasets (Ultralytics).
 
-Uses Ultralytics (default weights: ``yolo11n-seg.pt``).
+``--task seg`` (default) trains on ``datasets/cubes_seg``, ``--task pose``
+on ``datasets/cubes_pose`` (4 top-face corners, ``docs/pose_pnp.md``).
+Colour is the class, so hue augmentation is off (``hsv_h=0``); pose also
+trains without horizontal flips (``fliplr=0``) so corner order stays
+canonical. Dataset paths are resolved to absolute ones before training
+(``<project>/<name>_data.yaml``), so the run does not depend on cwd or
+Ultralytics' ``datasets_dir``.
 
 Example::
 
     python3 tools/train_yolo.py
-    python3 tools/train_yolo.py --epochs 100 --device 0 --batch 8
+    python3 tools/train_yolo.py --task pose --model yolo26s-pose.pt --device 0
     python3 tools/train_yolo.py --data datasets/cubes_seg/data.yaml \\
-        --model yolo11s-seg.pt --project runs/seg --name cubes
+        --model yolo26n-seg.pt --project runs/seg --name cubes --epochs 100
 """
 
 from __future__ import annotations
@@ -17,84 +23,128 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
+
+import yaml
+
+TASK_DEFAULTS: dict[str, dict[str, Any]] = {
+    'seg': {
+        'data': Path('datasets/cubes_seg/data.yaml'),
+        'model': 'yolo26n-seg.pt',
+        'project': Path('runs/seg'),
+        'name': 'cubes',
+        'fliplr': 0.5,
+    },
+    'pose': {
+        'data': Path('datasets/cubes_pose/data.yaml'),
+        'model': 'yolo26n-pose.pt',
+        'project': Path('runs/pose'),
+        'name': 'cubes_pose',
+        'fliplr': 0.0,
+    },
+}
+POSE_KPT_SHAPE = [4, 3]
+SPLIT_KEYS = ('train', 'val', 'test')
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='Train YOLO-seg on the cubes_seg dataset (Ultralytics).'
+        description='Train YOLO seg / pose on the cube datasets (Ultralytics).'
     )
     parser.add_argument(
-        '--data',
-        type=Path,
-        default=Path('datasets/cubes_seg/data.yaml'),
-        help='Dataset YAML (default: datasets/cubes_seg/data.yaml)',
+        '--task',
+        choices=sorted(TASK_DEFAULTS),
+        default='seg',
+        help='seg (default) or pose; sets the defaults below',
     )
+    parser.add_argument('--data', type=Path, default=None, help='Dataset YAML')
     parser.add_argument(
         '--model',
         type=str,
-        default='yolo11n-seg.pt',
-        help='Base weights or checkpoint (default: yolo11n-seg.pt)',
+        default=None,
+        help='Base weights (default: yolo26n-seg.pt / yolo26n-pose.pt)',
     )
-    parser.add_argument(
-        '--epochs',
-        type=int,
-        default=50,
-        help='Training epochs (default: 50)',
-    )
-    parser.add_argument(
-        '--imgsz',
-        type=int,
-        default=640,
-        help='Image size (default: 640)',
-    )
-    parser.add_argument(
-        '--batch',
-        type=int,
-        default=8,
-        help='Batch size (default: 8)',
-    )
+    parser.add_argument('--epochs', type=int, default=100, help='Epochs (default: 100)')
+    parser.add_argument('--imgsz', type=int, default=640, help='Image size (default: 640)')
+    parser.add_argument('--batch', type=int, default=16, help='Batch size (default: 16)')
     parser.add_argument(
         '--device',
         type=str,
         default='',
         help="Device, e.g. '' (auto), 'cpu', '0', '0,1'",
     )
+    parser.add_argument('--workers', type=int, default=4, help='Dataloader workers')
+    parser.add_argument('--project', type=Path, default=None, help='Ultralytics project dir')
+    parser.add_argument('--name', type=str, default=None, help='Run name under project')
+    parser.add_argument('--patience', type=int, default=30, help='Early-stopping patience')
+    parser.add_argument('--seed', type=int, default=0, help='RNG seed (default: 0)')
     parser.add_argument(
-        '--workers',
-        type=int,
-        default=4,
-        help='Dataloader workers (default: 4)',
+        '--fliplr',
+        type=float,
+        default=None,
+        help='Horizontal flip probability (default: seg 0.5, pose 0.0)',
     )
     parser.add_argument(
-        '--project',
-        type=Path,
-        default=Path('runs/seg'),
-        help='Ultralytics project directory (default: runs/seg)',
+        '--hsv-h',
+        type=float,
+        default=0.0,
+        help='Hue augmentation (default: 0.0 — colour is the class)',
     )
-    parser.add_argument(
-        '--name',
-        type=str,
-        default='cubes',
-        help='Run name under project (default: cubes)',
-    )
-    parser.add_argument(
-        '--patience',
-        type=int,
-        default=20,
-        help='Early-stopping patience (default: 20)',
-    )
-    parser.add_argument(
-        '--seed',
-        type=int,
-        default=0,
-        help='RNG seed (default: 0)',
-    )
-    parser.add_argument(
-        '--exist-ok',
-        action='store_true',
-        help='Overwrite an existing run directory',
-    )
-    return parser.parse_args(argv)
+    parser.add_argument('--exist-ok', action='store_true', help='Reuse the run dir')
+    args = parser.parse_args(argv)
+
+    defaults = TASK_DEFAULTS[args.task]
+    for key in ('data', 'model', 'project', 'name', 'fliplr'):
+        if getattr(args, key) is None:
+            setattr(args, key, defaults[key])
+    return args
+
+
+def resolve_data_yaml(data_path: Path) -> dict[str, Any]:
+    """
+    Load a dataset YAML with absolute ``path`` / split directories.
+
+    Relative ``path`` is taken against the YAML's directory. A split like
+    ``../train/images`` (Roboflow export) falls back to ``train/images``
+    when only that exists, matching Ultralytics. Missing ``test`` is
+    dropped; missing ``train`` / ``val`` raise ``FileNotFoundError``.
+    """
+    data = yaml.safe_load(data_path.read_text(encoding='utf-8')) or {}
+    root = Path(data.get('path') or '.')
+    if not root.is_absolute():
+        root = (data_path.parent / root).resolve()
+    data['path'] = str(root)
+
+    for key in SPLIT_KEYS:
+        value = data.get(key)
+        if value is None:
+            continue
+        split = Path(value)
+        if not split.is_absolute():
+            candidate = (root / split).resolve()
+            if not candidate.exists() and value.startswith('../'):
+                candidate = (root / value[3:]).resolve()
+            split = candidate
+        if not split.exists():
+            if key == 'test':
+                del data[key]
+                continue
+            raise FileNotFoundError(f'{key} split not found: {split} (from {data_path})')
+        data[key] = str(split)
+    for key in ('train', 'val'):
+        if key not in data:
+            raise FileNotFoundError(f'{data_path} has no {key!r} split')
+    return data
+
+
+def check_task_data(task: str, data: dict[str, Any]) -> None:
+    """Fail early when a pose run gets a dataset without 4 corners."""
+    if task == 'pose' and list(data.get('kpt_shape') or []) != POSE_KPT_SHAPE:
+        raise ValueError(
+            f"pose needs kpt_shape {POSE_KPT_SHAPE}, got {data.get('kpt_shape')!r}"
+        )
+    if task == 'seg' and 'kpt_shape' in data:
+        raise ValueError('seg run got a pose dataset (kpt_shape set); use --task pose')
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -102,40 +152,62 @@ def main(argv: list[str] | None = None) -> int:
     if not args.data.is_file():
         print(
             f'ERROR: dataset YAML not found: {args.data}\n'
-            f'  Run tools/autolabel.py first.',
+            '  Build it with tools/cvat_to_yolo.py (or tools/autolabel.py for seg).',
             file=sys.stderr,
         )
         return 1
+    try:
+        data = resolve_data_yaml(args.data)
+        check_task_data(args.task, data)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f'ERROR: {exc}', file=sys.stderr)
+        return 1
+    if args.task == 'pose' and args.fliplr > 0.0:
+        print(
+            'WARN: fliplr > 0 breaks the c0 rule after flips (docs/pose_pnp.md)',
+            file=sys.stderr,
+        )
 
     try:
         from ultralytics import YOLO
     except ImportError as exc:
         raise SystemExit(
             'Missing ultralytics. Install with:\n'
-            '  pip install ultralytics\n'
+            '  pip install -c deploy/constraints.txt ultralytics\n'
             f'Original error: {exc}'
         ) from exc
 
+    args.project.mkdir(parents=True, exist_ok=True)
+    resolved = (args.project / f'{args.name}_data.yaml').resolve()
+    with resolved.open('w', encoding='utf-8') as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+
     train_kwargs = {
-        'data': str(args.data),
+        'data': str(resolved),
         'epochs': args.epochs,
         'imgsz': args.imgsz,
         'batch': args.batch,
         'workers': args.workers,
-        'project': str(args.project),
+        'project': str(args.project.resolve()),
         'name': args.name,
         'patience': args.patience,
         'seed': args.seed,
         'exist_ok': args.exist_ok,
+        'fliplr': args.fliplr,
+        'hsv_h': args.hsv_h,
     }
     if args.device != '':
         train_kwargs['device'] = args.device
 
-    print(f'Training {args.model} on {args.data}')
+    print(f'Training {args.model} ({args.task}) on {resolved}')
     model = YOLO(args.model)
     results = model.train(**train_kwargs)
     save_dir = getattr(results, 'save_dir', args.project / args.name)
-    print(f'Done. Weights under: {save_dir}')
+    print(
+        f'Done. Weights under: {save_dir}\n'
+        f'  Export: python3 tools/export_model.py {save_dir}/weights/best.pt '
+        f'--name cubes_{args.task}'
+    )
     return 0
 
 

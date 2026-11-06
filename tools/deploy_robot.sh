@@ -127,8 +127,9 @@ Na robocie (w kontenerze humble):
     depth_module.depth_profile:=640x480x15
 
   # Silnik TensorRT (po wgraniu nowego .pt; tworzy cubes_seg.engine obok):
-  cd /ws/models
-  yolo export model=cubes_seg.pt format=engine half=True imgsz=640 device=0
+  cd /ws
+  python3 src/perception/tools/export_model.py /ws/models/cubes_seg.pt \\
+    --formats engine --out /ws/models
 
   # Węzeł (params_robot.yaml: cubes_seg.engine na GPU,
   #        fallback cubes_seg.onnx na CPU):

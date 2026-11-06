@@ -6,3 +6,5 @@ opencv-python<4.12
 opencv-python-headless<4.12
 # setuptools >= 80 removed `setup.py develop`, which colcon --symlink-install uses.
 setuptools<80
+# Same Ultralytics as deploy/constraints.txt (training ↔ robot export match).
+ultralytics==8.4.191

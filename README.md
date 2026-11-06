@@ -29,6 +29,7 @@ Frame (RGB + depth + K)
 | `core.slot_assign` | numery miejsc 1..N wzdłuż osi + walidacja linii/odstępów |
 | `core.dataset` | `load_frame` z `data/index.csv` |
 | `core.geometry` | deprojekcja, RANSAC płaszczyzny, poza kostki, `transform_pose` |
+| `core.keypoints` | kanoniczna kolejność 4 narożników górnej ściany (`c0..c3`) |
 | `core.frame_utils` | głębia mm → m, `K` z `camera_info` |
 | `core.debug_vis` | obraz debug (ROI / id tracka, maski, etykiety, yaw), suma masek mono8 |
 | `pipeline` | `@register`, `Pipeline.from_config` / `process` (`rois_mode`) |
@@ -81,9 +82,14 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 │   ├── roi_picker.py
 │   ├── hsv_tuner.py
 │   ├── autolabel.py               # Grounded SAM → YOLO-seg dataset
-│   └── train_yolo.py              # Ultralytics yolo11n-seg
+│   ├── cvat_to_yolo.py            # CVAT (poligon + 4 narożniki) → cubes_seg + cubes_pose
+│   ├── preview_pose_labels.py     # kontrola kolejności narożników + podgląd
+│   ├── train_yolo.py              # Ultralytics seg / pose (YOLO26)
+│   ├── export_model.py            # .pt → .onnx (CPU) / .engine (GPU, na Jetsonie)
+│   ├── bench_models.py            # ms / klatkę per model i urządzenie
+│   └── jetson_gpu_check.py        # gotowość kontenera robota do GPU
 ├── data/                          # klatki + index.csv (gitignore)
-├── datasets/                      # cubes_seg / (gitignore)
+├── datasets/                      # cubes_seg/, cubes_pose/ (gitignore)
 ├── runs/                          # trening YOLO (gitignore)
 └── results/                       # ewaluacja (gitignore)
 ```
@@ -339,12 +345,14 @@ Wyjście: `datasets/cubes_seg/{images,labels}/{train,val}/`, `data.yaml`, opcjon
 `ultralytics` jest w obrazie (z ograniczeniem `numpy<2`, patrz wyżej).
 
 ```bash
-python3 tools/train_yolo.py
-python3 tools/train_yolo.py --epochs 100 --device 0 --batch 8 \
-  --data datasets/cubes_seg/data.yaml --model yolo11n-seg.pt
+python3 tools/train_yolo.py                       # seg: datasets/cubes_seg, yolo26n-seg.pt
+python3 tools/train_yolo.py --task pose --device 0  # pose: datasets/cubes_pose, yolo26n-pose.pt
+python3 tools/train_yolo.py --task pose --model yolo26s-pose.pt --epochs 150
 ```
 
-Wagi: `runs/seg/cubes/weights/best.pt`.
+`hsv_h=0` (kolor to klasa), dla pose `fliplr=0`; ścieżki datasetu są rozwiązywane do bezwzględnych. Wagi: `runs/seg/cubes/weights/best.pt`, `runs/pose/cubes_pose/weights/best.pt`.
+
+Pełny przepływ danych i modeli (CVAT → datasety → trening → eksport → robot): [docs/training.md](docs/training.md).
 
 ---
 

@@ -42,9 +42,11 @@ Węzeł przy starcie ładuje `model_path` na `device` i robi `warmup_runs` predy
 - **`.engine` buduje się na Jetsonie** z `.pt` — silnik jest związany z wersją TensorRT i GPU, plik z laptopa nie zadziała:
 
 ```bash
-cd /ws/models
-yolo export model=cubes_seg.pt format=engine half=True imgsz=640 device=0
+cd /ws
+python3 src/perception/tools/export_model.py /ws/models/cubes_seg.pt --formats engine --out /ws/models
 ```
+
+- Gotowość kontenera do GPU (NumPy 1.x, `cv_bridge`, CUDA w torch, TensorRT; z `--export` także test eksportu YOLO26): `python3 src/perception/tools/jetson_gpu_check.py`. Pełny przepływ modeli: [training.md](training.md).
 
 - Wymuszenie CPU bez edycji YAML: `model_path:=/ws/models/cubes_seg.onnx device:=cpu` (argumenty launchu, nie `--ros-args -p`).
 - Zmierzone na CPU: **~124 ms / klatkę** w kontenerze humble (Orin NX) przy 640. Na fallbacku głosowanie po oknie klatek trwa odpowiednio dłużej.
