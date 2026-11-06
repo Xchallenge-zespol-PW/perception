@@ -40,7 +40,9 @@ def assign_slots(
     * ``len(tracked) == expected_count``
     * each cube has a pose
     * max distance to the least-squares line ≤ ``max_line_deviation_m``
-    * consecutive gaps along ``axis`` in ``[min_spacing_m, max_spacing_m]``
+    * consecutive gaps measured **along that line** in
+      ``[min_spacing_m, max_spacing_m]`` (so a row at an angle to ``axis``
+      keeps its true spacing; ``axis`` only sets the numbering order)
     """
     axis_key = str(axis).strip().lower()
     if axis_key not in _AXIS_INDEX:
@@ -57,7 +59,6 @@ def assign_slots(
 
     valid = _validate(
         ordered,
-        axis_index=idx,
         expected_count=expected_count,
         max_line_deviation_m=max_line_deviation_m,
         min_spacing_m=min_spacing_m,
@@ -88,7 +89,6 @@ def assign_slots(
 def _validate(
     ordered: Sequence[TrackedCube],
     *,
-    axis_index: int,
     expected_count: int,
     max_line_deviation_m: float,
     min_spacing_m: float,
@@ -100,32 +100,29 @@ def _validate(
         return False
 
     points = np.stack([t.pose.position for t in ordered])  # type: ignore[union-attr]
-    if not _line_ok(points, max_line_deviation_m):
-        return False
-
-    coords = points[:, axis_index]
-    gaps = np.diff(coords)
-    if gaps.size and (
-        np.any(gaps < min_spacing_m) or np.any(gaps > max_spacing_m)
-    ):
-        return False
-    return True
-
-
-def _line_ok(points: np.ndarray, max_dev: float) -> bool:
-    """Check that every point lies within ``max_dev`` of the best-fit 3D line."""
     if points.shape[0] < 2:
         return True
     centroid = points.mean(axis=0)
     centered = points - centroid
-    # Direction = first principal component.
+    direction = _line_direction(centered)
+    if not _line_ok(centered, direction, max_line_deviation_m):
+        return False
+
+    gaps = np.abs(np.diff(centered @ direction))
+    if np.any(gaps < min_spacing_m) or np.any(gaps > max_spacing_m):
+        return False
+    return True
+
+
+def _line_direction(centered: np.ndarray) -> np.ndarray:
+    """Return the unit first principal component of centred points."""
     _u, _s, vh = np.linalg.svd(centered, full_matrices=False)
     direction = vh[0]
-    norm = float(np.linalg.norm(direction))
-    if norm < 1e-12:
-        return float(np.max(np.linalg.norm(centered, axis=1))) <= max_dev
-    direction = direction / norm
+    return direction / float(np.linalg.norm(direction))
+
+
+def _line_ok(centered: np.ndarray, direction: np.ndarray, max_dev: float) -> bool:
+    """Check that every point lies within ``max_dev`` of the best-fit 3D line."""
     # Distance to line: || (p - c) × d ||.
-    cross = np.cross(centered, direction)
-    dist = np.linalg.norm(cross, axis=1)
+    dist = np.linalg.norm(np.cross(centered, direction), axis=1)
     return float(np.max(dist)) <= max_dev

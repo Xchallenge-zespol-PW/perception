@@ -100,3 +100,32 @@ def test_spacing_out_of_range_fails():
         max_spacing_m=0.20,
     )
     assert not result.valid
+
+
+def _rotated_row(spacing: float, angle_deg: float) -> list[TrackedCube]:
+    """4 cubes in a row at ``angle_deg`` to the y axis (in the x-y plane)."""
+    a = np.deg2rad(angle_deg)
+    step = np.array([np.sin(a), np.cos(a)]) * spacing
+    return [
+        _cube(10 + i, float(i * step[1]), x=0.5 + float(i * step[0]))
+        for i in (2, 0, 3, 1)
+    ]
+
+
+def test_row_at_an_angle_keeps_true_spacing():
+    # 5 cm apart along the row, but only ~3.8 cm along y at 40°.
+    result = assign_slots(
+        _rotated_row(0.05, 40.0), expected_count=4,
+        min_spacing_m=0.045, max_spacing_m=0.20,
+    )
+    assert result.valid
+    assert [s.track_id for s in result.slots] == [10, 11, 12, 13]  # sorted by y
+    assert [s.slot for s in result.slots] == [1, 2, 3, 4]
+
+
+def test_row_at_an_angle_too_close_fails():
+    result = assign_slots(
+        _rotated_row(0.03, 40.0), expected_count=4,
+        min_spacing_m=0.04, max_spacing_m=0.20,
+    )
+    assert not result.valid

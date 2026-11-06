@@ -203,7 +203,7 @@ ros2 launch g1_perception perception.launch.py config:=params_robot.yaml \
 | Poza | `cube_size_m`, `margin_px`, `z_min_m`, `z_max_m` (≤ 0 wyłącza) |
 | PnP (`pose_estimator: pnp`) | `kpt_min_conf`, `pnp_max_reproj_px`, `pnp_max_depth_diff_m` (przy `pnp_depth_diff_ref_m`, dalej × (z / ref)²), `pnp_max_normal_deg`, `pnp_fallback` (`geometric` \| `none`) |
 | Głosowanie / tracking | `vote_window_s` (> 0 = okno czasowe w sekundach stempli klatek; 0 = okno klatek), `vote_min_votes` (min. głosów w oknie czasowym), `vote_window` (okno klatek; w trybie czasowym limit głosów), `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`), `match_dist_m`, `max_missed_s` (> 0 = track znika po tylu sekundach bez detekcji) / `max_missed` (klatki) |
-| Miejsca (`rois_mode=none`) | `slot_axis` (`y` = L→P na robocie), `expected_count`, `max_line_deviation_m`, `min_spacing_m`, `max_spacing_m` |
+| Miejsca (`rois_mode=none`) | `slot_axis` (`y` = L→P na robocie), `expected_count`, `max_line_deviation_m`, `min_spacing_m` / `max_spacing_m` (odstęp między sąsiednimi kostkami mierzony wzdłuż dopasowanej linii rzędu, więc rząd może leżeć pod kątem do `slot_axis`) |
 | Tempo | `publish_rate_hz` |
 
 `params_robot.yaml` używa `rois_mode: none` (YOLO → tracker 3D → TF → numery miejsc). `params_laptop.yaml` domyślnie `image_roi`.
