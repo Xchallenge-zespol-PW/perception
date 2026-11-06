@@ -6,7 +6,7 @@ Przepływ od nagrania do modeli na robocie dla obu segmenterów: `yolo_seg` (mas
 record_cubes.sh → extract_frames.py → CVAT (poligon + 4 narożniki)
   → cvat_to_yolo.py → cubes_seg/ + cubes_pose/ → preview_pose_labels.py
   → train_yolo.py (Colab GPU) → export_model.py (.pt + .onnx)
-  → deploy_robot.sh → export_model.py --formats engine (na Jetsonie) → bench_models.py
+  → deploy_robot.sh → export_model.py --formats engine (na Jetsonie) → compare_backends.py → bench_models.py
 ```
 
 Laptop nie ma CUDA (AMD), więc trening idzie w Colabie; na laptopie konwersja, podgląd, eksport `.onnx` i bench na CPU.
@@ -96,6 +96,8 @@ Na robocie (w kontenerze), silniki TensorRT z wgranych `.pt` — `.onnx` (fallba
 cd /ws
 python3 src/perception/tools/export_model.py /ws/models/cubes_seg.pt --formats engine --out /ws/models
 python3 src/perception/tools/export_model.py /ws/models/cubes_pose.pt --formats engine --out /ws/models
+# silnik (GPU, FP16) vs .onnx (CPU) na tych samych klatkach — ma być OK:
+python3 src/perception/tools/compare_backends.py /ws/models/cubes_pose.engine /ws/models/cubes_pose.onnx --frames /ws/data/frames
 ```
 
 `params_robot.yaml` ładuje `/ws/models/cubes_seg.engine` na GPU z fallbackiem `/ws/models/cubes_seg.onnx` na CPU ([robot.md](robot.md)).

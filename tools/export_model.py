@@ -2,6 +2,10 @@
 """
 Export trained YOLO weights for the node: ``.onnx`` (CPU) and ``.engine`` (GPU).
 
+Without CUDA-enabled torch (the JetPack 5 robot container) the engine is
+built from a temporary ONNX through the TensorRT API instead of
+``yolo export``; the file layout is the same, so the node loads either.
+
 Copies the results under one name to ``--out`` (default ``models/``), as
 ``params_robot.yaml`` expects: ``cubes_seg.{pt,onnx,engine}`` or
 ``cubes_pose.{pt,onnx,engine}``. The ``.pt`` is copied too — the TensorRT
@@ -23,6 +27,7 @@ import argparse
 import platform
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 FORMAT_SUFFIX = {'onnx': '.onnx', 'engine': '.engine'}
@@ -105,6 +110,15 @@ def main(argv: list[str] | None = None) -> int:
 
     onnx_target = target_path(args.out, name, 'onnx')
     for fmt in formats:
+        if fmt == 'engine' and not _torch_cuda():
+            # No CUDA torch (JetPack 5 robot container): ONNX on CPU, then the
+            # TensorRT API builds the engine — no Ultralytics engine export.
+            target = target_path(args.out, name, 'engine')
+            build_engine_without_torch(
+                YOLO, pt_target, target, imgsz=args.imgsz, half=not args.no_half
+            )
+            print(f'Exported engine (TensorRT API): {target}')
+            continue
         kwargs = {'format': fmt, 'imgsz': args.imgsz}
         backup = None
         if fmt == 'engine':
@@ -132,6 +146,34 @@ def main(argv: list[str] | None = None) -> int:
         f"{target_path(args.out, name, 'onnx')}"
     )
     return 0
+
+
+def build_engine_without_torch(
+    yolo_cls: type,
+    pt_path: Path,
+    engine_path: Path,
+    *,
+    imgsz: int,
+    half: bool,
+) -> Path:
+    """Export a temporary ONNX on CPU and build the engine with TensorRT."""
+    from g1_perception.segmenters.trt_runtime import build_engine
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_pt = Path(tmp) / pt_path.name
+        shutil.copy2(pt_path, tmp_pt)
+        onnx_path = Path(
+            yolo_cls(str(tmp_pt)).export(format='onnx', imgsz=imgsz, device='cpu')
+        )
+        return build_engine(onnx_path, engine_path, half=half)
+
+
+def _torch_cuda() -> bool:
+    try:
+        import torch
+    except ImportError:
+        return False
+    return bool(torch.cuda.is_available())
 
 
 if __name__ == '__main__':

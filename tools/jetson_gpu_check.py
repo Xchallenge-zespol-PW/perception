@@ -3,9 +3,11 @@
 Check the robot container for GPU inference (run inside the humble container).
 
 Checks, each PASS / FAIL: NumPy 1.x, ``cv_bridge`` import, ``ultralytics``,
-``onnxruntime`` providers, PyTorch with CUDA, TensorRT. With ``--export``,
-also builds a TensorRT engine from stock weights (e.g. ``yolo26n-pose.pt``,
-downloaded by Ultralytics) and times it — the go / no-go for YOLO26 on
+``onnxruntime`` providers, the CUDA driver (``libcuda``), TensorRT on the
+GPU. PyTorch with CUDA is reported as INFO only: the node runs ``.engine``
+without torch (``trt_runtime``). With ``--export``, also builds a TensorRT
+engine from stock weights (e.g. ``yolo26n-pose.pt``, downloaded by
+Ultralytics) without torch and times it — the go / no-go for YOLO26 on
 this JetPack before training (fallback: ``yolo11n-pose.pt``).
 
 Example::
@@ -75,9 +77,17 @@ def check_torch_cuda() -> str:
     return f'torch {torch.__version__}, CUDA {torch.version.cuda}, {torch.cuda.get_device_name(0)}'
 
 
+def check_cuda_driver() -> str:
+    from g1_perception.segmenters.trt_runtime import cuda_driver_ok
+    if not cuda_driver_ok():
+        raise RuntimeError('libcuda cuInit / cuDeviceGetCount failed (runtime nvidia, video group?)')
+    return 'ok'
+
+
 def check_tensorrt() -> str:
     import tensorrt
-    return tensorrt.__version__
+    builder = tensorrt.Builder(tensorrt.Logger())
+    return f'{tensorrt.__version__}, fast FP16: {builder.platform_has_fast_fp16}'
 
 
 CHECKS: list[tuple[str, Callable[[], str]]] = [
@@ -85,8 +95,12 @@ CHECKS: list[tuple[str, Callable[[], str]]] = [
     ('cv_bridge', check_cv_bridge),
     ('ultralytics', check_ultralytics),
     ('onnxruntime', check_onnxruntime),
-    ('torch + CUDA', check_torch_cuda),
-    ('tensorrt', check_tensorrt),
+    ('CUDA driver', check_cuda_driver),
+    ('tensorrt (GPU)', check_tensorrt),
+]
+# Informational: the node does not need CUDA torch for .engine.
+INFO_CHECKS: list[tuple[str, Callable[[], str]]] = [
+    ('torch + CUDA (optional)', check_torch_cuda),
 ]
 
 
@@ -104,22 +118,25 @@ def run_checks(
 
 
 def export_and_time(weights: str, workdir: Path, runs: int) -> str:
-    """Export stock weights to a FP16 engine and time ``predict`` on it."""
+    """Build a FP16 engine from stock weights without torch and time it."""
     import numpy as np
     from ultralytics import YOLO
 
+    from g1_perception.segmenters.trt_runtime import TrtYoloModel, build_engine
+
     workdir.mkdir(parents=True, exist_ok=True)
     os.chdir(workdir)  # stock weights download here; the engine lands next to them
-    engine = Path(YOLO(weights).export(format='engine', half=True, imgsz=640, device=0))
+    onnx_path = Path(YOLO(weights).export(format='onnx', imgsz=640, device='cpu'))
+    engine = build_engine(onnx_path, onnx_path.with_suffix('.engine'), half=True)
+    model = TrtYoloModel(engine)
     blank = np.zeros((480, 640, 3), dtype=np.uint8)
-    trt = YOLO(str(engine))
     for _ in range(3):
-        trt.predict(blank, device=0, verbose=False)
+        model.predict(blank)
     t0 = time.perf_counter()
     for _ in range(runs):
-        trt.predict(blank, device=0, verbose=False)
+        model.predict(blank)
     ms = (time.perf_counter() - t0) * 1000.0 / runs
-    return f'{engine} — {ms:.1f} ms / frame'
+    return f'{engine} — {ms:.1f} ms / frame (incl. pre/post-processing)'
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -133,6 +150,8 @@ def main(argv: list[str] | None = None) -> int:
         ])
     for name, ok, detail in results:
         print(f"{'PASS' if ok else 'FAIL'}  {name:28s} {detail}")
+    for name, _ok, detail in run_checks(INFO_CHECKS):
+        print(f"INFO  {name:28s} {detail}")
     return 0 if all(ok for _, ok, _ in results) else 1
 
 

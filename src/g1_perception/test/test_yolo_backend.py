@@ -38,6 +38,7 @@ def _fake_ultralytics(monkeypatch):
     _FakeYolo.fail_suffixes = ()
     monkeypatch.setattr(yolo_backend, '_import_yolo', lambda: _FakeYolo)
     monkeypatch.setattr(yolo_backend, 'cuda_available', lambda: True)
+    monkeypatch.setattr(yolo_backend, 'engine_backend_available', lambda: False)
 
 
 def _touch(tmp_path: Path, name: str) -> Path:
@@ -124,3 +125,17 @@ def test_unsupported_suffix_raises(tmp_path):
 def test_describe_auto_device():
     backend = YoloBackend(model=None, model_path=Path('m.pt'), device=None)
     assert backend.describe() == 'pt:auto'
+
+
+def test_engine_uses_tensorrt_backend_without_torch_cuda(tmp_path, monkeypatch):
+    monkeypatch.setattr(yolo_backend, 'cuda_available', lambda: False)
+    monkeypatch.setattr(yolo_backend, 'engine_backend_available', lambda: True)
+
+    class _FakeTrt(_FakeYolo):
+        pass
+
+    monkeypatch.setattr(yolo_backend, '_engine_model_cls', lambda: _FakeTrt)
+    engine = _touch(tmp_path, 'cubes.engine')
+    backend = load_yolo(engine, '0', warmup_runs=1)
+    assert isinstance(backend.model, _FakeTrt)
+    assert not backend.fallback and backend.describe() == 'engine:0'

@@ -69,6 +69,11 @@ def bench():
     return _load_tool('bench_models')
 
 
+@pytest.fixture(scope='module')
+def compare():
+    return _load_tool('compare_backends')
+
+
 def _write_cvat(tmp_path: Path) -> tuple[Path, Path]:
     xml = tmp_path / 'annotations.xml'
     xml.write_text(CVAT_XML, encoding='utf-8')
@@ -199,3 +204,25 @@ def test_bench_summary_and_device(bench):
     assert stats['fps'] == pytest.approx(40.0)
     assert bench.device_for(Path('m.onnx'), '0') == 'cpu'
     assert bench.device_for(Path('m.engine'), '0') == '0'
+
+
+def test_compare_results_matches_by_iou(compare):
+    class _B:
+        def __init__(self, xyxy, conf):
+            self.xyxy = np.asarray(xyxy, float)
+            self.conf = np.asarray(conf, float)
+
+    class _R:
+        def __init__(self, xyxy, conf, kpts=None):
+            self.boxes = _B(xyxy, conf)
+            self.keypoints = None if kpts is None else type('K', (), {'data': np.asarray(kpts)})
+            self.masks = None
+
+    ref = _R([[0, 0, 10, 10], [50, 50, 60, 60]], [0.9, 0.8], [[[1, 1, 1]], [[55, 55, 1]]])
+    test = _R([[50.5, 50, 60, 60], [0, 0, 10, 11]], [0.79, 0.91], [[[55, 56, 1]], [[1, 1, 1]]])
+    out = compare.compare_results(ref, test)
+    assert out['count_diff'] == 0
+    assert out['box_px'] == pytest.approx(1.0)
+    assert out['conf'] == pytest.approx(0.01)
+    assert out['kpt_px'] == pytest.approx(1.0)
+    assert out['mask_iou'] == 1.0

@@ -88,6 +88,7 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 │   ├── train_yolo.py              # Ultralytics seg / pose (YOLO26)
 │   ├── export_model.py            # .pt → .onnx (CPU) / .engine (GPU, na Jetsonie)
 │   ├── bench_models.py            # ms / klatkę per model i urządzenie
+│   ├── compare_backends.py        # .engine (GPU) vs .onnx (CPU): zgodność wyników
 │   └── jetson_gpu_check.py        # gotowość kontenera robota do GPU
 ├── data/                          # klatki + index.csv (gitignore)
 ├── datasets/                      # cubes_seg/, cubes_pose/ (gitignore)
@@ -461,7 +462,7 @@ Per slot w oknie ostatnich `window` klatek albo, z `window_s`, głosów ze stemp
 | Nazwa | Moduł | Zachowanie |
 |-------|-------|------------|
 | `hsv` | `segmenters/hsv.py` | Per ROI: maski HSV red/green, erozja, odsetek ≥ `min_frac` → `red`/`green`; poniżej progu brak detekcji (→ `empty`) |
-| `yolo_seg` | `segmenters/yolo_seg.py` | YOLO-seg (`.pt`/`.onnx`/`.engine`, ładowanie przez `segmenters/yolo_backend.py` z fallbackiem CPU), `retina_masks=True`, slot gdy pokrycie maski z ROI > 50%; zachowuje nazwę klasy z modelu; opcjonalnie `verify_hsv` (niezgodność z HSV → `uncertain`) |
+| `yolo_seg` | `segmenters/yolo_seg.py` | YOLO-seg (`.pt`/`.onnx`/`.engine`, ładowanie przez `segmenters/yolo_backend.py` z fallbackiem CPU; `.engine` bez torcha przez `trt_runtime.py` + `yolo_decode.py`), `retina_masks=True`, slot gdy pokrycie maski z ROI > 50%; zachowuje nazwę klasy z modelu; opcjonalnie `verify_hsv` (niezgodność z HSV → `uncertain`) |
 
 Import `ultralytics` tylko wewnątrz `YoloSegSegmenter` (opcjonalna zależność).
 

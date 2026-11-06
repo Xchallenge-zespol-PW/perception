@@ -28,7 +28,7 @@ Te same nazwy na laptopie i na robocie (`config/params_robot.yaml` / `params_lap
 
 ## Model na GPU (TensorRT) i fallback CPU (ONNX)
 
-Węzeł przy starcie ładuje `model_path` na `device` i robi `warmup_runs` predykcji na pustym obrazie (Ultralytics otwiera `.onnx` / `.engine` dopiero przy pierwszej predykcji; inicjalizacja TensorRT nie trafia wtedy do pierwszej klatki z kamery). Jeśli to się nie uda — brak pliku, brak CUDA (`torch.cuda.is_available()` = False) albo błąd TensorRT — ładuje `fallback_model_path` na `fallback_device` i loguje **ostrzeżenie**. Aktywny backend (np. `engine:0` albo `onnx:cpu fallback`) jest w logu startowym, w statystykach co 10 s i na `/perception/debug_image`.
+Węzeł przy starcie ładuje `model_path` na `device` i robi `warmup_runs` predykcji na pustym obrazie (Ultralytics otwiera `.onnx` / `.engine` dopiero przy pierwszej predykcji; inicjalizacja TensorRT nie trafia wtedy do pierwszej klatki z kamery). `.engine` działa przez własny backend TensorRT (`segmenters/trt_runtime.py`: bindingi `tensorrt` + `libcudart`, dekodowanie w numpy), bez torcha z CUDA — na JetPacku 5 z Pythonem 3.10 takiego torcha nie ma. Jeśli to się nie uda — brak pliku, brak GPU (`libcuda`) albo bindingów `tensorrt`, błąd TensorRT — ładuje `fallback_model_path` na `fallback_device` i loguje **ostrzeżenie**. Aktywny backend (np. `engine:0` albo `onnx:cpu fallback`) jest w logu startowym, w statystykach co 10 s i na `/perception/debug_image`.
 
 | Parametr | Robot |
 |----------|-------|
@@ -46,7 +46,9 @@ cd /ws
 python3 src/perception/tools/export_model.py /ws/models/cubes_seg.pt --formats engine --out /ws/models
 ```
 
-- Gotowość kontenera do GPU (NumPy 1.x, `cv_bridge`, CUDA w torch, TensorRT; z `--export` także test eksportu YOLO26): `python3 src/perception/tools/jetson_gpu_check.py`. Pełny przepływ modeli: [training.md](training.md).
+- Bez torcha z CUDA `export_model.py` buduje silnik przez API TensorRT z tymczasowego `.onnx` (ten sam format pliku co `yolo export`).
+- Zgodność silnika z `.onnx` (prostokąty, narożniki, maski; FP16 vs FP32): `python3 src/perception/tools/compare_backends.py /ws/models/cubes_seg.engine /ws/models/cubes_seg.onnx --frames /ws/data/frames` — ma wypisać `OK`.
+- Gotowość kontenera do GPU (NumPy 1.x, `cv_bridge`, sterownik CUDA, TensorRT na GPU; torch z CUDA tylko jako INFO; z `--export` także test silnika YOLO26 bez torcha): `python3 src/perception/tools/jetson_gpu_check.py`. Pełny przepływ modeli: [training.md](training.md).
 
 - Wymuszenie CPU bez edycji YAML: `model_path:=/ws/models/cubes_seg.onnx device:=cpu` (argumenty launchu, nie `--ros-args -p`).
 - Zmierzone na CPU: **~124 ms / klatkę** w kontenerze humble (Orin NX) przy 640. Na fallbacku głosowanie po oknie klatek trwa odpowiednio dłużej.
@@ -124,7 +126,7 @@ Te same klucze parametrów — różnią się wartościami pod środowisko.
 ## Checklist przed startem na robocie
 
 1. `ROS_DOMAIN_ID=0`, CycloneDDS, kamera publikuje trzy topici przy 640×480×15.  
-2. `YOLO_AUTOINSTALL=false`, `numpy` 1.x, `cv_bridge` + `onnxruntime` importują się; `python3 -c "import torch, tensorrt; print(torch.cuda.is_available())"` daje `True`.  
+2. `YOLO_AUTOINSTALL=false`, `numpy` 1.x, `cv_bridge` + `onnxruntime` importują się; `python3 src/perception/tools/jetson_gpu_check.py` bez `FAIL` (TensorRT na GPU; torch z CUDA niepotrzebny).  
 3. `/ws/models/cubes_seg.engine` (zbudowany na tym Jetsonie) i `/ws/models/cubes_seg.onnx` (imgsz 640) na miejscu.  
 4. `colcon build` bez błędów + `source /ws/install/setup.bash`.  
 5. Launch z `params_robot.yaml`; w logu `Inference backend engine:0` (nie `… fallback`); `/perception/cubes` i opcjonalnie debug image.

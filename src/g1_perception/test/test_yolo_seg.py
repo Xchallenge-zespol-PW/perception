@@ -184,6 +184,7 @@ def test_segment_uses_fallback_device(tmp_path, monkeypatch):
 
     monkeypatch.setattr(yolo_backend, '_import_yolo', lambda: _FakeYolo)
     monkeypatch.setattr(yolo_backend, 'cuda_available', lambda: False)
+    monkeypatch.setattr(yolo_backend, 'engine_backend_available', lambda: False)
     engine = tmp_path / 'cubes.engine'
     onnx = tmp_path / 'cubes.onnx'
     engine.write_bytes(b'x')

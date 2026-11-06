@@ -56,6 +56,19 @@ def cuda_available() -> bool:
     return bool(torch.cuda.is_available())
 
 
+def engine_backend_available() -> bool:
+    """Check that ``.engine`` files can run without torch (TensorRT + GPU)."""
+    from g1_perception.segmenters.trt_runtime import tensorrt_available
+
+    return tensorrt_available()
+
+
+def _engine_model_cls() -> type:
+    from g1_perception.segmenters.trt_runtime import TrtYoloModel
+
+    return TrtYoloModel
+
+
 def load_yolo(
     model_path: str | Path,
     device: str | None = None,
@@ -112,7 +125,13 @@ def _load(
     warmup_runs: int,
     predict_kwargs: Mapping[str, Any],
 ) -> Any:
-    """Construct ``YOLO(model_path)`` and warm it up on ``device``."""
+    """
+    Construct the model and warm it up on ``device``.
+
+    ``.engine`` runs on :class:`TrtYoloModel` (TensorRT, no torch) when the
+    ``tensorrt`` bindings and a GPU are present; everything else, and
+    ``.engine`` without those bindings, goes through Ultralytics ``YOLO``.
+    """
     if model_path.suffix not in MODEL_SUFFIXES:
         raise RuntimeError(
             f'Unsupported model format {model_path.suffix!r} '
@@ -123,18 +142,22 @@ def _load(
             f'Model weights not found: {model_path} '
             f'(relative paths are resolved against cwd: {Path.cwd()})'
         )
-    if needs_cuda(model_path, device) and not cuda_available():
+    if model_path.suffix == '.engine' and engine_backend_available():
+        model_cls = _engine_model_cls()
+    elif needs_cuda(model_path, device) and not cuda_available():
         raise RuntimeError(
-            f'{model_path.name} on device {device or "auto"!r} needs CUDA, '
-            'but torch.cuda.is_available() is False'
+            f'{model_path.name} on device {device or "auto"!r} needs CUDA: '
+            'no TensorRT bindings with a GPU and torch.cuda.is_available() '
+            'is False'
         )
-    yolo_cls = _import_yolo()
+    else:
+        model_cls = _import_yolo()
     kwargs = {'verbose': False, **predict_kwargs}
     if device is not None:
         kwargs['device'] = device
     blank = np.zeros((*WARMUP_SHAPE, 3), dtype=np.uint8)
     try:
-        model = yolo_cls(str(model_path))
+        model = model_cls(str(model_path))
         for _ in range(max(int(warmup_runs), 0)):
             model.predict(blank, **kwargs)
     except Exception as exc:  # Ultralytics / TensorRT raise many types
