@@ -363,7 +363,7 @@ Pełny przepływ danych i modeli (CVAT → datasety → trening → eksport → 
 | Typ | Pola |
 |-----|------|
 | `Frame` | `rgb` HxWx3 uint8, `depth_m` HxW float32, `K` 3×3, `stamp` |
-| `Detection` | `slot`, `label` (surowa nazwa z segmentera), `score`, `mask` HxW bool |
+| `Detection` | `slot`, `label` (surowa nazwa z segmentera), `score`, `mask` HxW bool, opcjonalnie `keypoints` Kx3 `(u, v, conf)` (narożniki `c0..c3` z `yolo_pose`) |
 | `Pose` | `position` (3,), `quat` xyzw (4,), `score` |
 | `SlotResult` | `slot`, `label` (kanoniczna), `score`, `detection \| None`, `pose \| None` |
 | `Segmenter` | `segment(frame) -> list[Detection]` |
@@ -392,6 +392,7 @@ label_map = load_label_map()  # {'red cube': 'red', 'zielony': 'green', ...}
 | Funkcja | Opis |
 |---------|------|
 | `deproject(mask, depth_m, K)` | Nx3 punkty (pomija zera; opcjonalny zakres Z) |
+| `quad_mask(corners, shape)` | HxW bool wypełnionego wielokąta narożników (Nx2 albo Kx3); dla `yolo_pose` tylko górna ściana |
 | `fit_plane_ransac(points)` | `(normal, d, n_inliers)` |
 | `table_plane_around(roi, mask, …)` | płaszczyzna stołu wokół ROI bez maski obiektu |
 | `cube_pose_on_table(points, plane, size=0.05)` | `Pose` (minAreaRect, yaw % 90°, środek + size/2 wzdłuż normalnej) |

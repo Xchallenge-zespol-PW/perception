@@ -40,13 +40,17 @@ class Detection:
     ``slot`` is a known table index or None, ``label`` is the raw class name
     as produced by the segmenter (mapped to a canonical label by the
     pipeline), ``score`` is confidence in [0, 1], ``mask`` is an HxW bool
-    array.
+    array. ``keypoints`` is an optional Kx3 array ``(u, v, conf)`` in
+    pixels: for ``yolo_pose`` the 4 top-face corners ``c0..c3`` with
+    per-corner confidence (``docs/pose_pnp.md``); None for segmenters
+    without keypoints.
     """
 
     slot: int | None
     label: str
     score: float
     mask: NDArray[np.bool_]
+    keypoints: NDArray[np.float64] | None = None
 
 
 @dataclass(frozen=True)
