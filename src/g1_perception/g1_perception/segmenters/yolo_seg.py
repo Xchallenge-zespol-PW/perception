@@ -25,6 +25,7 @@ from g1_perception.core.types import (
 )
 from g1_perception.pipeline import register
 from g1_perception.segmenters.hsv import _in_range
+from g1_perception.segmenters.yolo_backend import YoloBackend, load_yolo
 
 DEFAULT_MIN_OVERLAP = 0.5
 
@@ -116,8 +117,16 @@ class YoloSegSegmenter:
         label_map: Mapping[str, str] | None = None,
         labels_path: str | Path | None = None,
         device: str | None = None,
+        fallback_model_path: str | Path | None = None,
+        fallback_device: str | None = 'cpu',
+        warmup_runs: int = 0,
     ) -> None:
         self.model_path = Path(model_path)
+        self.fallback_model_path = (
+            Path(fallback_model_path) if fallback_model_path else None
+        )
+        self.fallback_device = fallback_device
+        self.warmup_runs = int(warmup_runs)
         if rois is None and rois_path is None:
             self.rois = []
         elif rois is None:
@@ -138,7 +147,7 @@ class YoloSegSegmenter:
         self.verify_hsv = bool(verify_hsv)
         self.hsv_min_frac = float(hsv_min_frac)
         self.device = device
-        self._model = None
+        self._backend: YoloBackend | None = None
 
         self.hsv: HsvConfig | None
         if verify_hsv:
@@ -159,21 +168,38 @@ class YoloSegSegmenter:
         else:
             self.label_map = dict(label_map) if label_map is not None else None
 
-    def _ensure_model(self):
-        """Lazy-load Ultralytics YOLO (``.pt`` or ``.engine``)."""
-        if self._model is not None:
-            return self._model
-        try:
-            from ultralytics import YOLO
-        except ImportError as exc:
-            raise ImportError(
-                'ultralytics is required for YoloSegSegmenter. '
-                'Install with: pip install ultralytics'
-            ) from exc
-        if not self.model_path.is_file():
-            raise FileNotFoundError(f'Model weights not found: {self.model_path}')
-        self._model = YOLO(str(self.model_path))
-        return self._model
+    @property
+    def backend(self) -> YoloBackend | None:
+        """Return the loaded model and device (None before :meth:`load`)."""
+        return self._backend
+
+    def load(self) -> YoloBackend:
+        """
+        Load and warm up the model (``.pt`` / ``.onnx`` / ``.engine``).
+
+        Falls back to ``fallback_model_path`` on ``fallback_device`` when
+        the primary model cannot run (see :func:`load_yolo`). Called lazily
+        by :meth:`segment`; call it at startup to fail early.
+        """
+        if self._backend is None:
+            self._backend = load_yolo(
+                self.model_path,
+                self.device,
+                fallback_model_path=self.fallback_model_path,
+                fallback_device=self.fallback_device,
+                warmup_runs=self.warmup_runs,
+                predict_kwargs=self._predict_kwargs(),
+            )
+        return self._backend
+
+    def _predict_kwargs(self) -> dict[str, object]:
+        """Ultralytics ``predict`` arguments shared by warm-up and segment."""
+        return {
+            'retina_masks': True,
+            'conf': self.conf,
+            'iou': self.iou,
+            'verbose': False,
+        }
 
     def segment(self, frame: Frame) -> list[Detection]:
         """
@@ -182,18 +208,14 @@ class YoloSegSegmenter:
         When several instances map to the same slot, the highest-confidence
         one is kept. With ``verify_hsv``, mismatched colour → ``uncertain``.
         """
-        model = self._ensure_model()
+        backend = self.load()
+        model = backend.model
         h, w = frame.rgb.shape[:2]
         bgr = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR)
 
-        predict_kwargs = {
-            'retina_masks': True,
-            'conf': self.conf,
-            'iou': self.iou,
-            'verbose': False,
-        }
-        if self.device is not None:
-            predict_kwargs['device'] = self.device
+        predict_kwargs = self._predict_kwargs()
+        if backend.device is not None:
+            predict_kwargs['device'] = backend.device
 
         results = model.predict(bgr, **predict_kwargs)
         if not results:

@@ -24,11 +24,13 @@ Frame (RGB + depth + K)
 | `core.types` | `Frame`, `Detection`, `Pose`, `SlotResult`, stałe etykiet, protokoły |
 | `core.config` | ROI / HSV / mapa etykiet z YAML |
 | `core.labels` | `canonical_label` (nazwa z modelu → etykieta kanoniczna) |
-| `core.voting` | `SlotVoter`: głosowanie po oknie N klatek per slot |
+| `core.voting` | `SlotVoter`: głosowanie per slot w oknie czasowym (sekundy) albo N klatek |
 | `core.tracker` | śledzenie 3D (najbliższy sąsiad) + głosowanie per track |
 | `core.slot_assign` | numery miejsc 1..N wzdłuż osi + walidacja linii/odstępów |
 | `core.dataset` | `load_frame` z `data/index.csv` |
 | `core.geometry` | deprojekcja, RANSAC płaszczyzny, poza kostki, `transform_pose` |
+| `core.keypoints` | kanoniczna kolejność 4 narożników górnej ściany (`c0..c3`) |
+| `core.pnp` | poza górnej ściany z 4 narożników (IPPE_SQUARE), wybór rozwiązania po normalnej stołu, yaw na stole, środek bryły |
 | `core.frame_utils` | głębia mm → m, `K` z `camera_info` |
 | `core.debug_vis` | obraz debug (ROI / id tracka, maski, etykiety, yaw), suma masek mono8 |
 | `pipeline` | `@register`, `Pipeline.from_config` / `process` (`rois_mode`) |
@@ -52,7 +54,7 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 │   ├── config/                    # rois, labels, params_{laptop,robot}.yaml
 │   ├── launch/perception.launch.py  # config:=params_laptop.yaml (domyślnie)
 ├── deploy/                        # requirements-robot.txt, constraints.txt (numpy<2)
-├── docs/robot.md                  # Jetson Orin NX / Humble / ONNX CPU
+├── docs/robot.md                  # Jetson Orin NX / Humble / TensorRT GPU + ONNX CPU
 │   ├── g1_perception/
 │   │   ├── core/
 │   │   │   ├── types.py
@@ -81,9 +83,15 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 │   ├── roi_picker.py
 │   ├── hsv_tuner.py
 │   ├── autolabel.py               # Grounded SAM → YOLO-seg dataset
-│   └── train_yolo.py              # Ultralytics yolo11n-seg
+│   ├── cvat_to_yolo.py            # CVAT (poligon + 4 narożniki) → cubes_seg + cubes_pose
+│   ├── preview_pose_labels.py     # kontrola kolejności narożników + podgląd
+│   ├── train_yolo.py              # Ultralytics seg / pose (YOLO26)
+│   ├── export_model.py            # .pt → .onnx (CPU) / .engine (GPU, na Jetsonie)
+│   ├── bench_models.py            # ms / klatkę per model i urządzenie
+│   ├── compare_backends.py        # .engine (GPU) vs .onnx (CPU): zgodność wyników
+│   └── jetson_gpu_check.py        # gotowość kontenera robota do GPU
 ├── data/                          # klatki + index.csv (gitignore)
-├── datasets/                      # cubes_seg / (gitignore)
+├── datasets/                      # cubes_seg/, cubes_pose/ (gitignore)
 ├── runs/                          # trening YOLO (gitignore)
 └── results/                       # ewaluacja (gitignore)
 ```
@@ -137,7 +145,7 @@ Nie instaluj `pytest>=7` przez `pip --user` — gryzie się z pluginami ROS (`la
 
 ## Węzeł ROS 2 (`perception_node`)
 
-Kamera ~15 kl/s, inferencja ~125 ms (~8 kl/s): callback synchronizatora zapisuje **tylko najnowszy** zestaw (kolor + głębia + `camera_info`, QoS sensor data). Osobny wątek bierze ten zestaw, buduje `Frame` (rgb8→RGB; YOLO wewnątrz robi BGR; 16UC1 mm→float32 m), woła `Pipeline.process` + `SlotVoter`. Klatki, które przyszły w trakcie inferencji, są **pomijane** (brak kolejki = brak narastającego opóźnienia). Publikacja `/perception/cubes`, maski i debugu idzie z timerem `publish_rate_hz`. Co 10 s log: średni czas inferencji [ms] i liczba pominiętych klatek. Przed Ultralytics ustawiane jest `YOLO_AUTOINSTALL=false`.
+Kamera ~15 kl/s, inferencja na CPU ~125 ms (~8 kl/s): callback synchronizatora zapisuje **tylko najnowszy** zestaw (kolor + głębia + `camera_info`, QoS sensor data). Osobny wątek bierze ten zestaw, buduje `Frame` (rgb8→RGB; YOLO wewnątrz robi BGR; 16UC1 mm→float32 m), woła `Pipeline.process` + `SlotVoter`. Klatki, które przyszły w trakcie inferencji, są **pomijane** (brak kolejki = brak narastającego opóźnienia). Publikacja `/perception/cubes`, maski i debugu idzie z timerem `publish_rate_hz`. Model jest ładowany i rozgrzewany przy starcie węzła (z fallbackiem na CPU, patrz niżej). Co 10 s log: średni czas inferencji [ms], liczba pominiętych klatek i aktywny backend. Przed Ultralytics ustawiane jest `YOLO_AUTOINSTALL=false`.
 
 ### Uruchomienie na bagu
 
@@ -175,24 +183,28 @@ Uwagi:
 - `--loop` cofa znaczniki czasu — zostaw `use_sim_time:=false`. `use_sim_time:=true` tylko z `ros2 bag play --clock` bez `--loop`.
 - `rois.yaml` / `rois_path` muszą pasować do kadru. ROI w pikselach wymagają stałej pozycji kamery względem stołu.
 - `config/*.yaml` instalują się do `share/g1_perception/config/` (`setup.py` glob).
-- Na robocie ONNX CPU ~124 ms/klatkę; `skipped_frames` w logu co 10 s pokazuje, ile klatek 15 Hz odrzucono.
+- Na robocie domyślnie TensorRT na GPU; na fallbacku ONNX CPU ~124 ms/klatkę. `skipped_frames` w logu co 10 s pokazuje, ile klatek 15 Hz odrzucono.
 
 ### Parametry (`config/params_*.yaml`)
 
-Te same klucze: `params_laptop.yaml` (`.pt` / `.onnx`), `params_robot.yaml` (`.onnx`, `device: cpu`). Wdrożenie G1/PC2: [docs/robot.md](docs/robot.md), `deploy/requirements-robot.txt`.
+Te same klucze: `params_laptop.yaml` (`.pt` / `.onnx`, `device: cpu`), `params_robot.yaml` (`.engine`, `device: "0"`, fallback `.onnx` na CPU). Wdrożenie G1/PC2: [docs/robot.md](docs/robot.md), `deploy/requirements-robot.txt`.
 
 ```bash
 ros2 launch g1_perception perception.launch.py config:=params_laptop.yaml
+# robot, wymuszenie CPU bez edycji YAML:
+ros2 launch g1_perception perception.launch.py config:=params_robot.yaml \
+  model_path:=/ws/models/cubes_seg.onnx device:=cpu
 ```
 
 | Grupa | Parametry |
 |-------|-----------|
 | Wejście | `color_topic`, `depth_topic` (aligned, `16UC1` mm lub `32FC1` m), `camera_info_topic`, `sync_queue_size`, `sync_slop_s` |
 | Wyjście | `output_topic` (`/perception/cubes`), `debug_image_topic`, `mask_topic`, `target_frame` (`""` = ramka kamery), `tf_timeout_s` |
-| Pipeline | `segmenter` (`yolo_seg` \| `hsv`), `pose_estimator` (`geometric` \| `centroid`), `model_path`, `device`, `conf`, `verify_hsv`, `rois_mode` (`none` \| `image_roi`), `rois_path` / `hsv_path` / `labels_path` (`""` = domyślne; w `none` brak pliku ROI nie jest błędem) |
+| Pipeline | `segmenter` (`yolo_seg` \| `hsv`), `pose_estimator` (`geometric` \| `centroid` \| `pnp`), `model_path`, `device`, `fallback_model_path` / `fallback_device` (gdy `model_path` nie ruszy na `device`), `warmup_runs` (predykcje na pustym obrazie przy starcie), `conf`, `verify_hsv`, `rois_mode` (`none` \| `image_roi`), `rois_path` / `hsv_path` / `labels_path` (`""` = domyślne; w `none` brak pliku ROI nie jest błędem) |
 | Poza | `cube_size_m`, `margin_px`, `z_min_m`, `z_max_m` (≤ 0 wyłącza) |
-| Głosowanie / tracking | `vote_window`, `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`), `match_dist_m`, `max_missed` |
-| Miejsca (`rois_mode=none`) | `slot_axis` (`y` = L→P na robocie), `expected_count`, `max_line_deviation_m`, `min_spacing_m`, `max_spacing_m` |
+| PnP (`pose_estimator: pnp`) | `kpt_min_conf`, `pnp_max_reproj_px`, `pnp_max_depth_diff_m` (przy `pnp_depth_diff_ref_m`, dalej × (z / ref)²), `pnp_max_normal_deg`, `pnp_fallback` (`geometric` \| `none`) |
+| Głosowanie / tracking | `vote_window_s` (> 0 = okno czasowe w sekundach stempli klatek; 0 = okno klatek), `vote_min_votes` (min. głosów w oknie czasowym), `vote_window` (okno klatek; w trybie czasowym limit głosów), `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`), `match_dist_m`, `max_missed_s` (> 0 = track znika po tylu sekundach bez detekcji) / `max_missed` (klatki) |
+| Miejsca (`rois_mode=none`) | `slot_axis` (`y` = L→P na robocie), `expected_count`, `max_line_deviation_m`, `min_spacing_m` / `max_spacing_m` (odstęp między sąsiednimi kostkami mierzony wzdłuż dopasowanej linii rzędu, więc rząd może leżeć pod kątem do `slot_axis`) |
 | Tempo | `publish_rate_hz` |
 
 `params_robot.yaml` używa `rois_mode: none` (YOLO → tracker 3D → TF → numery miejsc). `params_laptop.yaml` domyślnie `image_roi`.
@@ -336,12 +348,14 @@ Wyjście: `datasets/cubes_seg/{images,labels}/{train,val}/`, `data.yaml`, opcjon
 `ultralytics` jest w obrazie (z ograniczeniem `numpy<2`, patrz wyżej).
 
 ```bash
-python3 tools/train_yolo.py
-python3 tools/train_yolo.py --epochs 100 --device 0 --batch 8 \
-  --data datasets/cubes_seg/data.yaml --model yolo11n-seg.pt
+python3 tools/train_yolo.py                       # seg: datasets/cubes_seg, yolo26n-seg.pt
+python3 tools/train_yolo.py --task pose --device 0  # pose: datasets/cubes_pose, yolo26n-pose.pt
+python3 tools/train_yolo.py --task pose --model yolo26s-pose.pt --epochs 150
 ```
 
-Wagi: `runs/seg/cubes/weights/best.pt`.
+`hsv_h=0` (kolor to klasa), dla pose `fliplr=0`; ścieżki datasetu są rozwiązywane do bezwzględnych. Wagi: `runs/seg/cubes/weights/best.pt`, `runs/pose/cubes_pose/weights/best.pt`.
+
+Pełny przepływ danych i modeli (CVAT → datasety → trening → eksport → robot): [docs/training.md](docs/training.md).
 
 ---
 
@@ -352,8 +366,8 @@ Wagi: `runs/seg/cubes/weights/best.pt`.
 | Typ | Pola |
 |-----|------|
 | `Frame` | `rgb` HxWx3 uint8, `depth_m` HxW float32, `K` 3×3, `stamp` |
-| `Detection` | `slot`, `label` (surowa nazwa z segmentera), `score`, `mask` HxW bool |
-| `Pose` | `position` (3,), `quat` xyzw (4,), `score` |
+| `Detection` | `slot`, `label` (surowa nazwa z segmentera), `score`, `mask` HxW bool, opcjonalnie `keypoints` Kx3 `(u, v, conf)` (narożniki `c0..c3` z `yolo_pose`) |
+| `Pose` | `position` (3,), `quat` xyzw (4,), `score`, opcjonalnie `method` (`pnp` \| `fallback:<powód>`) |
 | `SlotResult` | `slot`, `label` (kanoniczna), `score`, `detection \| None`, `pose \| None` |
 | `Segmenter` | `segment(frame) -> list[Detection]` |
 | `PoseEstimator` | `estimate(frame, det) -> Pose \| None` |
@@ -381,6 +395,7 @@ label_map = load_label_map()  # {'red cube': 'red', 'zielony': 'green', ...}
 | Funkcja | Opis |
 |---------|------|
 | `deproject(mask, depth_m, K)` | Nx3 punkty (pomija zera; opcjonalny zakres Z) |
+| `quad_mask(corners, shape)` | HxW bool wypełnionego wielokąta narożników (Nx2 albo Kx3); dla `yolo_pose` tylko górna ściana |
 | `fit_plane_ransac(points)` | `(normal, d, n_inliers)` |
 | `table_plane_around(roi, mask, …)` | płaszczyzna stołu wokół ROI bez maski obiektu |
 | `cube_pose_on_table(points, plane, size=0.05)` | `Pose` (minAreaRect, yaw % 90°, środek + size/2 wzdłuż normalnej) |
@@ -430,9 +445,13 @@ from g1_perception.core.voting import SlotVoter
 voter = SlotVoter(window=10, min_ratio=0.7)  # min_frames domyślnie = window
 for frame in frames:
     voted = voter.update(pipe.process(frame))  # list[VotedSlot], po slot
+
+# okno czasowe: te same decyzje przy 1 i 20 kl/s
+voter = SlotVoter(window=100, min_ratio=0.7, window_s=2.0, min_votes=5)
+voted = voter.update(pipe.process(frame), frame.stamp)
 ```
 
-Per slot w oknie ostatnich `window` klatek:
+Per slot w oknie ostatnich `window` klatek albo, z `window_s`, głosów ze stemplem nie starszym niż `window_s` od najnowszej klatki (wymaga `min_votes`; stempel cofnięty, np. `ros2 bag play --loop`, czyści historię):
 
 - etykieta = większość; `uncertain`, gdy udział < `min_ratio`, remis, za mało klatek (< `min_frames`) albo wygrywa `uncertain`; klatki `uncertain` liczą się do mianownika;
 - dla `red` / `green`: pozycja = mediana per oś z klatek zgodnych z wynikiem; yaw = mediana z symetrią 90° (średnia kołowa `4·yaw` jako punkt odniesienia, odchyłki zawijane do ±45°, mediana); oś Z = średnia normalna stołu;
@@ -443,7 +462,7 @@ Per slot w oknie ostatnich `window` klatek:
 | Nazwa | Moduł | Zachowanie |
 |-------|-------|------------|
 | `hsv` | `segmenters/hsv.py` | Per ROI: maski HSV red/green, erozja, odsetek ≥ `min_frac` → `red`/`green`; poniżej progu brak detekcji (→ `empty`) |
-| `yolo_seg` | `segmenters/yolo_seg.py` | YOLO-seg (`.pt`/`.engine`), `retina_masks=True`, slot gdy pokrycie maski z ROI > 50%; zachowuje nazwę klasy z modelu; opcjonalnie `verify_hsv` (niezgodność z HSV → `uncertain`) |
+| `yolo_seg` | `segmenters/yolo_seg.py` | YOLO-seg (`.pt`/`.onnx`/`.engine`, ładowanie przez `segmenters/yolo_backend.py` z fallbackiem CPU; `.engine` bez torcha przez `trt_runtime.py` + `yolo_decode.py`), `retina_masks=True`, slot gdy pokrycie maski z ROI > 50%; zachowuje nazwę klasy z modelu; opcjonalnie `verify_hsv` (niezgodność z HSV → `uncertain`) |
 
 Import `ultralytics` tylko wewnątrz `YoloSegSegmenter` (opcjonalna zależność).
 
@@ -453,6 +472,7 @@ Import `ultralytics` tylko wewnątrz `YoloSegSegmenter` (opcjonalna zależność
 |-------|-------|------------|
 | `centroid` | `pose/centroid.py` | Mediana punktów 3D; orientacja z normalnej stołu |
 | `geometric` | `pose/geometric.py` | `cube_pose_on_table` (RANSAC stołu + minAreaRect) |
+| `pnp` | `pose/pnp.py` | orientacja z 4 narożników (IPPE_SQUARE, rzut na stół), pozycja z głębi w czworokącie; odrzucenie (`no_keypoints`, `kpt_conf`, `no_table`, `no_depth`, `pnp_failed`, `reproj`, `tilt`, `depth_diff`) → `geometric` na górnej ścianie albo `None` |
 
 ---
 

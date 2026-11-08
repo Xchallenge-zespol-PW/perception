@@ -23,6 +23,9 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'pose_estimator': 'geometric',
     'model_path': 'runs/segment/runs/seg/cubes-2/weights/best.pt',
     'device': '',
+    'fallback_model_path': '',
+    'fallback_device': 'cpu',
+    'warmup_runs': 2,
     'conf': 0.25,
     'verify_hsv': False,
     'rois_mode': ROIS_MODE_IMAGE,
@@ -33,9 +36,18 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'margin_px': 20,
     'z_min_m': 0.1,
     'z_max_m': 2.0,
+    'kpt_min_conf': 0.5,
+    'pnp_max_reproj_px': 2.0,
+    'pnp_max_depth_diff_m': 0.03,
+    'pnp_depth_diff_ref_m': 0.6,
+    'pnp_max_normal_deg': 20.0,
+    'pnp_fallback': 'geometric',
     'vote_window': 10,
     'vote_min_ratio': 0.7,
     'vote_min_frames': 0,
+    'vote_window_s': 0.0,
+    'vote_min_votes': 1,
+    'max_missed_s': 0.0,
     'match_dist_m': 0.03,
     'max_missed': 5,
     'slot_axis': 'y',
@@ -63,6 +75,9 @@ def build_pipeline_config(params: Mapping[str, Any]) -> dict[str, Any]:
     seg_candidates = {
         'model_path': _opt_str(params.get('model_path')),
         'device': _opt_str(params.get('device')),
+        'fallback_model_path': _opt_str(params.get('fallback_model_path')),
+        'fallback_device': _opt_str(params.get('fallback_device')),
+        'warmup_runs': int(params.get('warmup_runs', 0)),
         'conf': float(params['conf']),
         'verify_hsv': bool(params['verify_hsv']),
         'hsv_path': _opt_str(params.get('hsv_path')),
@@ -72,6 +87,12 @@ def build_pipeline_config(params: Mapping[str, Any]) -> dict[str, Any]:
         'margin': int(params['margin_px']),
         'z_min': _opt_positive(params.get('z_min_m')),
         'z_max': _opt_positive(params.get('z_max_m')),
+        'kpt_min_conf': float(params['kpt_min_conf']),
+        'max_reproj_px': float(params['pnp_max_reproj_px']),
+        'max_depth_diff_m': float(params['pnp_max_depth_diff_m']),
+        'depth_diff_ref_m': float(params['pnp_depth_diff_ref_m']),
+        'max_normal_deg': float(params['pnp_max_normal_deg']),
+        'fallback': str(params['pnp_fallback']),
     }
 
     config: dict[str, Any] = {
@@ -93,24 +114,37 @@ def build_pipeline_config(params: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def voter_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
-    """Return :class:`SlotVoter` kwargs; ``vote_min_frames <= 0`` = window."""
+    """
+    Return :class:`SlotVoter` kwargs.
+
+    ``vote_window_s > 0`` selects the time window (``vote_min_votes`` votes,
+    ``vote_window`` caps frames); otherwise the frame window with
+    ``vote_min_frames`` (``<= 0`` = whole window).
+    """
     min_frames = int(params['vote_min_frames'])
+    window_s = float(params.get('vote_window_s', 0.0))
     return {
         'window': int(params['vote_window']),
         'min_ratio': float(params['vote_min_ratio']),
         'min_frames': min_frames if min_frames > 0 else None,
+        'window_s': window_s if window_s > 0.0 else None,
+        'min_votes': int(params.get('vote_min_votes', 1)),
     }
 
 
 def tracker_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
     """Return :class:`CubeTracker` kwargs from flat node parameters."""
     vk = voter_kwargs(params)
+    max_missed_s = float(params.get('max_missed_s', 0.0))
     return {
         'match_dist_m': float(params['match_dist_m']),
         'max_missed': int(params['max_missed']),
+        'max_missed_s': max_missed_s if max_missed_s > 0.0 else None,
         'vote_window': vk['window'],
         'vote_min_ratio': vk['min_ratio'],
         'vote_min_frames': vk['min_frames'],
+        'vote_window_s': vk['window_s'],
+        'vote_min_votes': vk['min_votes'],
     }
 
 

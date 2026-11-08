@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -22,6 +24,7 @@ from g1_perception.pipeline import (
     get_registered,
     register,
 )
+from g1_perception.segmenters.yolo_backend import YoloBackend
 from g1_perception.segmenters.yolo_seg import YoloSegSegmenter
 
 LABEL_MAP = {
@@ -178,7 +181,7 @@ def test_four_rois_two_yolo_detections_give_two_colours_two_empty(tmp_path):
         rois=ROIS_4,
         label_map=LABEL_MAP,
     )
-    pipeline._segmenter._model = _FakeModel()
+    pipeline._segmenter._backend = YoloBackend(_FakeModel(), weights, None)
 
     results = pipeline.process(_make_frame(h, w))
 
@@ -384,3 +387,24 @@ def test_rois_mode_none_skips_missing_rois_yaml(tmp_path):
     )
     assert pipeline.rois == []
     assert pipeline.process(_make_frame())[0].slot is None
+
+
+def test_load_and_backend_label_for_stage_with_backend():
+    class _LoadingSegmenter(FixedSegmenter):
+        backend = None
+
+        def load(self):
+            self.backend = YoloBackend(None, Path('m.engine'), device='0')
+
+    pipeline = Pipeline(
+        _LoadingSegmenter([]), RecordingPoseEstimator(), [], LABEL_MAP
+    )
+    assert pipeline.backend_label is None
+    pipeline.load()
+    assert pipeline.backend_label == 'engine:0'
+
+
+def test_load_is_noop_for_stage_without_model():
+    pipeline = _pipeline([])
+    pipeline.load()
+    assert pipeline.backend_label is None

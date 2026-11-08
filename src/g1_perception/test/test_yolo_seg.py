@@ -13,6 +13,8 @@ from g1_perception.core.types import (
     Frame,
 )
 from g1_perception.pipeline import clear_registry, get_registered, register
+from g1_perception.segmenters import yolo_backend
+from g1_perception.segmenters.yolo_backend import YoloBackend
 from g1_perception.segmenters.yolo_seg import (
     YoloSegSegmenter,
     best_slot_for_mask,
@@ -108,7 +110,7 @@ def test_verify_hsv_downgrades_mismatched_label(tmp_path):
         label_map=LABEL_MAP,
         min_overlap=0.5,
     )
-    seg._model = _FakeModel()
+    seg._backend = YoloBackend(_FakeModel(), weights, device=None)
 
     frame = Frame(
         rgb=rgb,
@@ -154,7 +156,7 @@ def test_segment_keeps_higher_confidence_per_slot(tmp_path):
     seg = YoloSegSegmenter(
         model_path=weights, rois=rois, verify_hsv=False, min_overlap=0.5
     )
-    seg._model = _FakeModel()
+    seg._backend = YoloBackend(_FakeModel(), weights, device=None)
 
     frame = Frame(
         rgb=np.zeros((h, w, 3), dtype=np.uint8),
@@ -166,3 +168,43 @@ def test_segment_keeps_higher_confidence_per_slot(tmp_path):
     assert len(dets) == 1
     assert dets[0].score == pytest.approx(0.95)
     assert np.array_equal(dets[0].mask, mask_b)
+
+
+def test_segment_uses_fallback_device(tmp_path, monkeypatch):
+    """Primary engine without CUDA → ONNX fallback; predict runs on CPU."""
+    calls: list[dict] = []
+
+    class _FakeYolo:
+        def __init__(self, path: str) -> None:
+            self.path = path
+
+        def predict(self, _img, **kwargs):
+            calls.append(kwargs)
+            return []
+
+    monkeypatch.setattr(yolo_backend, '_import_yolo', lambda: _FakeYolo)
+    monkeypatch.setattr(yolo_backend, 'cuda_available', lambda: False)
+    monkeypatch.setattr(yolo_backend, 'engine_backend_available', lambda: False)
+    engine = tmp_path / 'cubes.engine'
+    onnx = tmp_path / 'cubes.onnx'
+    engine.write_bytes(b'x')
+    onnx.write_bytes(b'x')
+    seg = YoloSegSegmenter(
+        model_path=engine,
+        device='0',
+        fallback_model_path=onnx,
+        warmup_runs=1,
+    )
+
+    backend = seg.load()
+    assert backend.fallback and backend.model_path == onnx
+    assert len(calls) == 1 and calls[0]['retina_masks'] is True
+
+    frame = Frame(
+        rgb=np.zeros((8, 8, 3), dtype=np.uint8),
+        depth_m=np.zeros((8, 8), dtype=np.float32),
+        K=np.eye(3, dtype=np.float64),
+        stamp=0.0,
+    )
+    assert seg.segment(frame) == []
+    assert [c['device'] for c in calls] == ['cpu', 'cpu']

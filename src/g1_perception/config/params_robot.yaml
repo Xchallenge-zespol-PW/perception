@@ -1,8 +1,9 @@
-# Unitree G1 / PC2 (Jetson Orin NX): RealSense D435i in head, ONNX on CPU.
+# Unitree G1 / PC2 (Jetson Orin NX): RealSense D435i in head, TensorRT on GPU.
 # Same keys as params_laptop.yaml. Launch inside the humble container:
 #   ros2 launch g1_perception perception.launch.py config:=params_robot.yaml
-# Absolute model_path: deploy_robot.sh copies .onnx to ~/humble_ws/models/
-# (= /ws/models/ in the container). Override: model_path:=/ws/models/other.onnx
+# deploy_robot.sh copies .pt / .onnx to ~/humble_ws/models/ (= /ws/models/ in
+# the container); the .engine is built on the Jetson (docs/robot.md).
+# Force CPU: model_path:=/ws/models/cubes_seg.onnx device:=cpu
 perception_node:
   ros__parameters:
     # Inputs (D435i, rgb8 + aligned depth 16UC1 mm)
@@ -20,11 +21,15 @@ perception_node:
     target_frame: camera_link
     tf_timeout_s: 0.1
 
-    # Pipeline (ONNX Runtime CPU via Ultralytics; no CUDA in the humble container)
+    # Pipeline: TensorRT engine on the GPU; if it cannot load (no CUDA, bad
+    # engine), the node falls back to ONNX on CPU and logs a warning.
     segmenter: yolo_seg
     pose_estimator: geometric
-    model_path: /ws/models/cubes_seg.onnx
-    device: cpu
+    model_path: /ws/models/cubes_seg.engine
+    device: "0"
+    fallback_model_path: /ws/models/cubes_seg.onnx
+    fallback_device: cpu
+    warmup_runs: 2
     conf: 0.25
     verify_hsv: false
     # Free detections + 3D tracker + place assignment (no image ROIs).
@@ -38,12 +43,24 @@ perception_node:
     margin_px: 20
     z_min_m: 0.1
     z_max_m: 2.0
+    # pose_estimator: pnp (YOLO-pose corners; see docs/pose_pnp.md)
+    kpt_min_conf: 0.5             # min confidence of every corner
+    pnp_max_reproj_px: 2.0        # max PnP reprojection error
+    pnp_max_depth_diff_m: 0.03    # max PnP vs depth distance at pnp_depth_diff_ref_m,
+    pnp_depth_diff_ref_m: 0.6     # scaled by (z / ref)^2 farther away
+    pnp_max_normal_deg: 20.0      # max top-face tilt vs table normal
+    pnp_fallback: geometric       # geometric | none
 
-    # Multi-frame voting / tracking (~124 ms/frame ONNX)
-    vote_window: 10
+    # Multi-frame voting / tracking over a time window, so GPU (~15 kl/s) and
+    # the CPU fallback (~8 kl/s) give the same decisions. vote_window caps
+    # votes per cube; vote_window_s: 0 / max_missed_s: 0 = old frame window.
+    vote_window_s: 2.0
+    vote_min_votes: 5
+    vote_window: 100
     vote_min_ratio: 0.7
     vote_min_frames: 0
     match_dist_m: 0.03
+    max_missed_s: 1.0
     max_missed: 5
     slot_axis: "y"
     expected_count: 4

@@ -26,11 +26,14 @@ def _launch_setup(context, *args, **kwargs):
         {'use_sim_time': ParameterValue(use_sim_time, value_type=bool)},
     ]
 
-    # Optional overrides (ros2 launch … model_path:=… rois_mode:=none).
+    # Optional overrides (ros2 launch … model_path:=… device:=cpu …).
     # Empty default keeps the value from the YAML params file.
     model_path = LaunchConfiguration('model_path').perform(context).strip()
     if model_path:
         parameters.append({'model_path': model_path})
+    device = LaunchConfiguration('device').perform(context).strip()
+    if device:
+        parameters.append({'device': device})
     rois_mode = LaunchConfiguration('rois_mode').perform(context).strip()
     if rois_mode:
         parameters.append({'rois_mode': rois_mode})
@@ -67,6 +70,14 @@ def generate_launch_description():
             description=(
                 'Override perception_node model_path from the YAML '
                 '(e.g. model_path:=/ws/models/cubes_seg.onnx)'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'device',
+            default_value='',
+            description=(
+                'Override device from the YAML (e.g. device:=cpu with '
+                'model_path:=/ws/models/cubes_seg.onnx to force CPU)'
             ),
         ),
         DeclareLaunchArgument(

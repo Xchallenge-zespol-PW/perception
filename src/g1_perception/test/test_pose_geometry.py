@@ -11,6 +11,7 @@ from g1_perception.core.geometry import (
     cube_pose_on_table,
     deproject,
     plane_basis,
+    quad_mask,
     table_plane_around,
     yaw_error_mod90_deg,
     yaw_on_plane_deg,
@@ -207,3 +208,31 @@ def test_geometric_pose_with_gaussian_depth_noise():
     )
     yaw_est = yaw_on_plane_deg(pose.quat, n)
     assert yaw_error_mod90_deg(yaw_est, yaw_true) < 2.0
+
+
+def test_quad_mask_fills_square_from_corners():
+    corners = np.array([[10.0, 5.0], [19.0, 5.0], [19.0, 14.0], [10.0, 14.0]])
+    mask = quad_mask(corners, (20, 30))
+    assert mask.shape == (20, 30) and mask.dtype == np.bool_
+    assert mask[5:15, 10:20].all()
+    assert np.count_nonzero(mask) == 100
+
+
+def test_quad_mask_accepts_keypoints_and_clips_to_image():
+    keypoints = np.array([
+        [-5.0, -5.0, 0.9], [8.0, -5.0, 0.9], [8.0, 4.0, 0.2], [-5.0, 4.0, 0.9],
+    ])
+    mask = quad_mask(keypoints, (10, 10))
+    assert mask[:5, :9].all() and not mask[5:, :].any() and not mask[:, 9:].any()
+
+
+def test_quad_mask_matches_roi_rectangle_of_tilted_quad():
+    corners = np.array([[20.0, 2.0], [38.0, 20.0], [20.0, 38.0], [2.0, 20.0]])
+    mask = quad_mask(corners, (40, 40))
+    assert mask[20, 20] and not mask[3, 3]
+    assert abs(np.count_nonzero(mask) - 2 * 18 * 18) < 80
+
+
+def test_quad_mask_rejects_bad_shape():
+    with pytest.raises(ValueError, match='corners'):
+        quad_mask(np.zeros((2, 2)), (10, 10))

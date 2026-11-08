@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from g1_perception.core.tracker import CubeTracker
 from g1_perception.core.types import (
@@ -73,7 +74,6 @@ def test_two_close_cubes_keep_separate_ids():
     ids_a = ids_b = None
     for _ in range(5):
         tracked = tracker.update([_obs(*a), _obs(*b)])
-        by_label = {t.label: t.track_id for t in tracked}
         # May be uncertain until vote settles; match by position instead.
         by_y = {
             round(float(t.pose.position[0]), 3): t.track_id
@@ -98,3 +98,30 @@ def test_majority_colour_over_window():
     assert len(tracked) == 1
     assert tracked[0].label == LABEL_RED
     assert tracked[0].label != LABEL_UNCERTAIN
+
+
+def test_time_based_expiry_independent_of_frame_rate():
+    for fps in (1.0, 20.0):
+        tracker = CubeTracker(
+            match_dist_m=0.03, vote_window=100, vote_window_s=2.0,
+            vote_min_votes=1, max_missed_s=1.5,
+        )
+        tracker.update([_obs(LABEL_RED, 0.0, 0.0)], 0.0)
+        t = 0.0
+        alive_at_1s = None
+        while t < 3.0:
+            t += 1.0 / fps
+            alive = bool(tracker.update([], t))
+            if abs(t - 1.0) < 1e-6:
+                alive_at_1s = alive
+        assert alive_at_1s is True
+        assert tracker.update([], t) == []
+
+
+def test_time_based_tracker_needs_stamp_and_resets_on_loop():
+    tracker = CubeTracker(vote_window=100, vote_window_s=2.0, max_missed_s=1.0)
+    with pytest.raises(ValueError, match='stamp'):
+        tracker.update([_obs(LABEL_RED, 0.0, 0.0)])
+    tracker.update([_obs(LABEL_RED, 0.0, 0.0)], 10.0)
+    tracked = tracker.update([_obs(LABEL_GREEN, 0.5, 0.0)], 0.1)
+    assert [t.track_id for t in tracked] == [1]  # ids restart after reset

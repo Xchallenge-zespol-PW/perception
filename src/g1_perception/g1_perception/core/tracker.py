@@ -15,6 +15,7 @@ from g1_perception.core.voting import SlotVoter, VotedSlot
 class _Track:
     track_id: int
     missed: int = 0
+    last_seen: float = 0.0
     last_detection: Detection | None = None
     last_position: np.ndarray | None = None
     last_pose: Pose | None = None
@@ -55,7 +56,9 @@ class CubeTracker:
 
     Each track owns a :class:`SlotVoter` window (keyed by ``track_id``):
     majority colour, median position, circular-median yaw modulo 90°.
-    Tracks unseen for more than ``max_missed`` frames are dropped.
+    Tracks unseen for more than ``max_missed`` frames are dropped, or, in
+    time mode (``vote_window_s`` / ``max_missed_s`` set), unseen for more
+    than ``max_missed_s`` seconds of frame stamps.
     """
 
     def __init__(
@@ -66,34 +69,62 @@ class CubeTracker:
         vote_window: int = 10,
         vote_min_ratio: float = 0.7,
         vote_min_frames: int | None = None,
+        vote_window_s: float | None = None,
+        vote_min_votes: int = 1,
+        max_missed_s: float | None = None,
     ) -> None:
         if match_dist_m <= 0.0:
             raise ValueError(f'match_dist_m must be > 0, got {match_dist_m}')
         if max_missed < 0:
             raise ValueError(f'max_missed must be >= 0, got {max_missed}')
+        if max_missed_s is not None and max_missed_s < 0.0:
+            raise ValueError(f'max_missed_s must be >= 0, got {max_missed_s}')
         self.match_dist_m = float(match_dist_m)
         self.max_missed = int(max_missed)
+        self.max_missed_s = None if max_missed_s is None else float(max_missed_s)
         self._voter = SlotVoter(
             window=vote_window,
             min_ratio=vote_min_ratio,
             min_frames=vote_min_frames,
+            window_s=vote_window_s,
+            min_votes=vote_min_votes,
         )
         self._tracks: dict[int, _Track] = {}
         self._next_id = 1
+        self._latest: float | None = None
 
     def reset(self) -> None:
         """Forget all tracks and voting history."""
         self._tracks.clear()
         self._voter.reset()
         self._next_id = 1
+        self._latest = None
 
-    def update(self, results: Sequence[SlotResult]) -> list[TrackedCube]:
+    def update(
+        self,
+        results: Sequence[SlotResult],
+        stamp: float | None = None,
+    ) -> list[TrackedCube]:
         """
         Match framed detections to tracks and return active tracked cubes.
 
         Only observations with a pose participate in matching. Unmatched
         observations spawn new tracks. Returned list is sorted by track id.
+        ``stamp`` (frame time, s) is required in time mode; a stamp older
+        than the previous one resets all tracks (bag ``--loop``).
         """
+        timed = self.max_missed_s is not None or self._voter.window_s is not None
+        if timed and stamp is None:
+            raise ValueError('time-based tracking needs a frame stamp')
+        if stamp is not None and self._latest is not None and stamp < self._latest:
+            self.reset()
+        if stamp is not None:
+            self._latest = float(stamp)
+        now = 0.0 if stamp is None else float(stamp)
+        if self._voter.window_s is not None:
+            # Advance the voter clock so windows of unmatched tracks age too.
+            self._voter.update([], stamp)
+
         observations = [r for r in results if r.pose is not None]
         track_ids = list(self._tracks)
         pairs = self._greedy_match(observations, track_ids)
@@ -106,6 +137,7 @@ class CubeTracker:
             obs = observations[obs_i]
             track = self._tracks[tid]
             track.missed = 0
+            track.last_seen = now
             track.last_detection = obs.detection
             track.last_pose = obs.pose
             track.last_position = np.asarray(
@@ -119,7 +151,7 @@ class CubeTracker:
                     detection=obs.detection,
                     pose=obs.pose,
                 )
-            ])
+            ], stamp)
 
         for obs_i, obs in enumerate(observations):
             if obs_i in matched_obs:
@@ -129,6 +161,7 @@ class CubeTracker:
             self._tracks[tid] = _Track(
                 track_id=tid,
                 missed=0,
+                last_seen=now,
                 last_detection=obs.detection,
                 last_pose=obs.pose,
                 last_position=np.asarray(
@@ -143,7 +176,7 @@ class CubeTracker:
                     detection=obs.detection,
                     pose=obs.pose,
                 )
-            ])
+            ], stamp)
 
         for tid in track_ids:
             if tid in matched_tracks:
@@ -152,7 +185,7 @@ class CubeTracker:
 
         dead = [
             tid for tid, tr in self._tracks.items()
-            if tr.missed > self.max_missed
+            if self._expired(tr, now)
         ]
         for tid in dead:
             del self._tracks[tid]
@@ -182,6 +215,12 @@ class CubeTracker:
                 )
             )
         return out
+
+    def _expired(self, track: _Track, now: float) -> bool:
+        """Check whether ``track`` was unseen too long (seconds or frames)."""
+        if self.max_missed_s is not None:
+            return now - track.last_seen > self.max_missed_s
+        return track.missed > self.max_missed
 
     def _greedy_match(
         self,

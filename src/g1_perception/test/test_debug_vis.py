@@ -65,3 +65,12 @@ def test_draw_debug_tints_masks_and_draws_voted_roi():
     assert tuple(out[25, 5]) == LABEL_COLORS_RGB[LABEL_RED]  # ROI 0 border
     assert tuple(out[25, 40]) == LABEL_COLORS_RGB[LABEL_EMPTY]  # ROI 1 border
     assert np.count_nonzero(out != base) > 0  # inference_ms text drawn
+
+
+def test_draw_debug_draws_backend_label():
+    rgb = np.zeros((60, 200, 3), dtype=np.uint8)
+    plain = draw_debug(rgb, [], [], [], inference_ms=30.0)
+    labelled = draw_debug(
+        rgb, [], [], [], inference_ms=30.0, backend='onnx:cpu fallback'
+    )
+    assert np.count_nonzero(labelled != plain) > 0

@@ -25,11 +25,11 @@ from g1_perception.core.types import (
 @dataclass(frozen=True)
 class VotedSlot:
     """
-    Voted decision for one slot / track over the frame window.
+    Voted decision for one slot / track over the frame or time window.
 
     ``score`` is the fraction of window frames that agree with the winning
     label (0 when there are too few frames). ``n_frames`` is the number of
-    frames currently in the slot's window. ``pose`` and ``yaw_deg`` are set
+    frames (votes) currently in the slot's window. ``pose`` and ``yaw_deg`` are set
     only for ``red`` / ``green`` winners with at least one pose;
     ``yaw_consistency`` is the circular resultant length of ``4 * yaw`` in
     [0, 1] (1 = all yaws agree modulo 90°). ``track_id`` is set in free
@@ -78,12 +78,18 @@ class SlotVoter:
     """
     Aggregate :class:`SlotResult` sequences over a sliding window per slot.
 
-    Per slot: majority label over the last ``window`` frames; the winner is
-    accepted only if its share is at least ``min_ratio``, it is not tied, and
-    the window holds at least ``min_frames`` frames (default: ``window``);
-    otherwise the slot is ``uncertain``. For colour winners the pose is the
-    per-axis median position of agreeing frames, the yaw is
+    Per slot: majority label over the window; the winner is accepted only if
+    its share is at least ``min_ratio``, it is not tied, and the window holds
+    enough votes; otherwise the slot is ``uncertain``. For colour winners the
+    pose is the per-axis median position of agreeing frames, the yaw is
     :func:`circular_median_mod90`, and +Z is the mean plane normal.
+
+    Frame mode (``window_s=None``): the last ``window`` frames, at least
+    ``min_frames`` of them (default: ``window``). Time mode (``window_s``
+    seconds): votes whose stamp is within ``window_s`` of the newest frame,
+    at least ``min_votes`` of them, so the decision does not depend on the
+    frame rate; ``window`` then only caps memory per slot. A stamp older
+    than the newest one (bag played with ``--loop``) resets the history.
     """
 
     def __init__(
@@ -91,6 +97,9 @@ class SlotVoter:
         window: int = 10,
         min_ratio: float = 0.7,
         min_frames: int | None = None,
+        *,
+        window_s: float | None = None,
+        min_votes: int = 1,
     ) -> None:
         if window < 1:
             raise ValueError(f'window must be >= 1, got {window}')
@@ -102,31 +111,58 @@ class SlotVoter:
             raise ValueError(
                 f'min_frames must be in [1, window], got {min_frames}'
             )
+        if window_s is not None and window_s <= 0.0:
+            raise ValueError(f'window_s must be > 0, got {window_s}')
+        if not 1 <= min_votes <= window:
+            raise ValueError(f'min_votes must be in [1, window], got {min_votes}')
         self.window = int(window)
         self.min_ratio = float(min_ratio)
         self.min_frames = int(min_frames)
-        self._history: dict[int, deque[SlotResult]] = {}
+        self.window_s = None if window_s is None else float(window_s)
+        self.min_votes = int(min_votes)
+        self._history: dict[int, deque[tuple[float, SlotResult]]] = {}
+        self._latest: float | None = None
 
-    def update(self, results: Sequence[SlotResult]) -> list[VotedSlot]:
-        """Add one frame of results and return the current vote."""
+    def update(
+        self,
+        results: Sequence[SlotResult],
+        stamp: float | None = None,
+    ) -> list[VotedSlot]:
+        """Add one frame of results (taken at ``stamp`` s) and vote."""
+        if self.window_s is not None:
+            if stamp is None:
+                raise ValueError('time-window voting needs a frame stamp')
+            if self._latest is not None and stamp < self._latest:
+                self.reset()
+            self._latest = float(stamp)
         for result in results:
             history = self._history.get(result.slot)
             if history is None:
                 history = deque(maxlen=self.window)
                 self._history[result.slot] = history
-            history.append(result)
+            history.append((0.0 if stamp is None else float(stamp), result))
         return self.vote()
 
     def vote(self) -> list[VotedSlot]:
         """Return the voted decision for every slot seen, sorted by slot."""
         return [
-            self._vote_slot(slot, list(self._history[slot]))
+            self._vote_slot(slot, self._window_results(slot))
             for slot in sorted(self._history)
         ]
 
     def reset(self) -> None:
         """Forget all accumulated frames."""
         self._history.clear()
+        self._latest = None
+
+    def _window_results(self, slot: int) -> list[SlotResult]:
+        """Results of ``slot`` inside the window (time mode drops old ones)."""
+        history = self._history[slot]
+        if self.window_s is not None and self._latest is not None:
+            oldest = self._latest - self.window_s
+            while history and history[0][0] < oldest:
+                history.popleft()
+        return [result for _stamp, result in history]
 
     def forget(self, slot: int) -> None:
         """Drop the window for one slot / track id."""
@@ -135,7 +171,8 @@ class SlotVoter:
     def _vote_slot(self, slot: int, history: list[SlotResult]) -> VotedSlot:
         """Vote a single slot from its window history."""
         n = len(history)
-        if n < self.min_frames:
+        needed = self.min_frames if self.window_s is None else self.min_votes
+        if n < needed:
             return _uncertain(slot, n)
 
         ranked = Counter(r.label for r in history).most_common()

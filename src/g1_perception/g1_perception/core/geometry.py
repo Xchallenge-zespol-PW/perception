@@ -123,6 +123,30 @@ def roi_from_mask(
     )
 
 
+def quad_mask(
+    corners: NDArray[np.float64],
+    shape: tuple[int, int],
+) -> NDArray[np.bool_]:
+    """
+    Return an HxW bool mask of the filled polygon through ``corners``.
+
+    ``corners`` is ``(N, 2)`` pixels ``(u, v)`` in polygon order (for the
+    cube top face: ``c0..c3``); Kx3 keypoints are accepted and their
+    confidence column is ignored. Parts outside the image are clipped.
+    For ``yolo_pose`` this mask covers only the top face, not the sides.
+    """
+    pts = np.asarray(corners, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[0] < 3 or pts.shape[1] not in (2, 3):
+        raise ValueError(
+            f'Expected (N >= 3, 2) or (N, 3) corners, got {pts.shape}'
+        )
+    height, width = int(shape[0]), int(shape[1])
+    canvas = np.zeros((height, width), dtype=np.uint8)
+    polygon = np.round(pts[:, :2]).astype(np.int32).reshape(-1, 1, 2)
+    cv2.fillPoly(canvas, [polygon], 1)
+    return canvas.astype(bool)
+
+
 def table_plane_around(
     roi: Roi,
     mask: NDArray[np.bool_],
@@ -258,7 +282,7 @@ def transform_pose(
 
     The transform maps source-frame coordinates to the target frame
     (``p_target = R p_source + t``), as returned by a TF lookup of
-    ``target <- source``. ``score`` is kept.
+    ``target <- source``. ``score`` and ``method`` are kept.
     """
     R_t = quat_to_rotation_matrix(rotation_xyzw)
     position = R_t @ np.asarray(pose.position, dtype=np.float64)
@@ -268,6 +292,7 @@ def transform_pose(
         position=position,
         quat=rotation_matrix_to_quat_xyzw(R),
         score=pose.score,
+        method=pose.method,
     )
 
 

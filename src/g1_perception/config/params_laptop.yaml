@@ -1,4 +1,5 @@
-# Laptop / devcontainer: RealSense (D455 or D435i), YOLO .pt or .onnx.
+# Laptop / devcontainer: RealSense (D455 or D435i), YOLO .pt or .onnx on CPU
+# (no CUDA on the laptop's AMD GPU; the devcontainer has no GPU either).
 # Same keys as params_robot.yaml. Launch:
 #   ros2 launch g1_perception perception.launch.py config:=params_laptop.yaml
 # Relative model_path is resolved against the process cwd (use /ws or humble_ws).
@@ -21,9 +22,12 @@ perception_node:
     # Pipeline
     segmenter: yolo_seg
     pose_estimator: geometric
-    # Prefer .pt on laptop with CUDA; .onnx (imgsz 640) also works via Ultralytics.
+    # .pt or .onnx (imgsz 640); device: "0" only on a machine with CUDA.
     model_path: runs/segment/runs/seg/cubes-2/weights/best.pt
-    device: ""
+    device: cpu
+    fallback_model_path: ""
+    fallback_device: cpu
+    warmup_runs: 1
     conf: 0.25
     verify_hsv: false
     rois_mode: none
@@ -36,12 +40,24 @@ perception_node:
     margin_px: 20
     z_min_m: 0.1
     z_max_m: 2.0
+    # pose_estimator: pnp (YOLO-pose corners; see docs/pose_pnp.md)
+    kpt_min_conf: 0.5             # min confidence of every corner
+    pnp_max_reproj_px: 2.0        # max PnP reprojection error
+    pnp_max_depth_diff_m: 0.03    # max PnP vs depth distance at pnp_depth_diff_ref_m,
+    pnp_depth_diff_ref_m: 0.6     # scaled by (z / ref)^2 farther away
+    pnp_max_normal_deg: 20.0      # max top-face tilt vs table normal
+    pnp_fallback: geometric       # geometric | none
 
-    # Multi-frame voting / tracking (used when rois_mode=none)
-    vote_window: 10
+    # Multi-frame voting / tracking over a time window, so laptop CPU and the
+    # robot GPU give the same decisions. vote_window caps votes per cube;
+    # vote_window_s: 0 / max_missed_s: 0 = old frame window.
+    vote_window_s: 2.0
+    vote_min_votes: 5
+    vote_window: 100
     vote_min_ratio: 0.7
     vote_min_frames: 0
     match_dist_m: 0.03
+    max_missed_s: 1.0
     max_missed: 5
     slot_axis: "y"
     expected_count: 4

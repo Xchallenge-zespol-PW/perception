@@ -6,7 +6,6 @@ import os
 import threading
 import time
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Any
 
 # Ultralytics may auto-upgrade numpy to 2.x and break Humble cv_bridge.
@@ -83,8 +82,8 @@ class PerceptionNode(Node):
     Synchronize color + aligned depth + camera_info and publish cube slots.
 
     The sync callback only keeps the **newest** message triple (no queue).
-    A worker thread always processes that newest set (~125 ms / frame on the
-    robot CPU), so older frames are dropped instead of building latency.
+    A worker thread always processes that newest set, so older frames are
+    dropped instead of building latency (matters most on the CPU fallback).
     With ``rois_mode=none``, detections are tracked in 3D and assigned place
     numbers after TF to ``target_frame``. Results publish at ``publish_rate_hz``.
     """
@@ -98,13 +97,24 @@ class PerceptionNode(Node):
         }
         p = self._params
 
-        if p['segmenter'] == 'yolo_seg' and not Path(p['model_path']).is_file():
-            raise FileNotFoundError(
-                f"model_path not found: {p['model_path']!r} "
-                f'(relative paths are resolved against cwd: {Path.cwd()})'
-            )
-
         self._pipeline = Pipeline.from_config(build_pipeline_config(p))
+        # Load + warm up now: fail early, and keep TensorRT / CUDA init
+        # out of the first camera frame.
+        t0 = time.perf_counter()
+        self._pipeline.load()
+        self._backend = self._pipeline.backend_label
+        if self._backend is not None:
+            load_s = time.perf_counter() - t0
+            log = self.get_logger()
+            if self._backend.endswith('fallback'):
+                log.warning(
+                    f'Inference backend {self._backend} (primary '
+                    f"{p['model_path']!r} unusable on device "
+                    f"{p['device'] or 'auto'!r}); expect slower inference"
+                )
+            else:
+                log.info(f'Inference backend {self._backend}')
+            log.info(f'Model loaded and warmed up in {load_s:.1f} s')
         self._rois = self._pipeline.rois
         self._rois_mode = self._pipeline.rois_mode
         self._free = self._rois_mode == ROIS_MODE_NONE or not self._rois
@@ -247,7 +257,7 @@ class PerceptionNode(Node):
             assert self._tracker is not None
             n_det = len(results)
             n_pose = sum(1 for r in results if r.pose is not None)
-            tracked = self._tracker.update(results)
+            tracked = self._tracker.update(results, frame.stamp)
             tracked_tf, frame_id = self._tracks_to_target(
                 tracked, camera_header
             )
@@ -266,7 +276,7 @@ class PerceptionNode(Node):
                     throttle_duration_sec=2.0,
                 )
         else:
-            voted_cam = self._voter.update(results)
+            voted_cam = self._voter.update(results, frame.stamp)
             voted, frame_id = self._voted_to_target(voted_cam, camera_header)
             debug_results = results
 
@@ -311,6 +321,7 @@ class PerceptionNode(Node):
                 bundle.results,
                 bundle.voted,
                 inference_ms=bundle.inference_ms,
+                backend=self._backend,
             )
             debug_msg = self._bridge.cv2_to_imgmsg(debug, encoding='rgb8')
             debug_msg.header = bundle.camera_header
@@ -336,7 +347,8 @@ class PerceptionNode(Node):
         self.get_logger().info(
             f'perception stats (10 s): '
             f'infer_ms_avg={total_ms / count:.1f} '
-            f'n={count} skipped_frames={skipped}'
+            f'n={count} skipped_frames={skipped} '
+            f'backend={self._backend or "-"}'
         )
 
     def _to_frame(self, color: Image, depth: Image, info: CameraInfo) -> Frame:

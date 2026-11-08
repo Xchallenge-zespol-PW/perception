@@ -10,14 +10,17 @@ import pytest
 from g1_perception.core.config import Roi
 from g1_perception.core.types import LABEL_GREEN, LABEL_RED, Frame
 from g1_perception.core.voting import SlotVoter
+from g1_perception.core.tracker import CubeTracker
 from g1_perception.node_config import (
     DEFAULT_PARAMS,
     build_pipeline_config,
+    tracker_kwargs,
     voter_kwargs,
 )
 from g1_perception.pipeline import Pipeline, clear_registry, register
 from g1_perception.pose.centroid import CentroidPoseEstimator
 from g1_perception.pose.geometric import GeometricPoseEstimator
+from g1_perception.pose.pnp import PnpPoseEstimator
 from g1_perception.segmenters.hsv import HsvSegmenter
 from g1_perception.segmenters.yolo_seg import YoloSegSegmenter
 
@@ -29,6 +32,7 @@ def _registry():
     register('yolo_seg')(YoloSegSegmenter)
     register('centroid')(CentroidPoseEstimator)
     register('geometric')(GeometricPoseEstimator)
+    register('pnp')(PnpPoseEstimator)
     yield
     clear_registry()
 
@@ -47,6 +51,8 @@ def test_yolo_geometric_config_from_defaults():
         'params': {
             'model_path': DEFAULT_PARAMS['model_path'],
             'device': '0',
+            'fallback_device': 'cpu',
+            'warmup_runs': 2,
             'conf': 0.25,
             'verify_hsv': True,
         },
@@ -84,14 +90,52 @@ def test_paths_forwarded_when_set():
     assert config['labels_path'] == 'l.yaml'
 
 
+def test_fallback_model_forwarded_when_set():
+    config = build_pipeline_config(_params(
+        model_path='/ws/models/cubes_seg.engine',
+        device='0',
+        fallback_model_path='/ws/models/cubes_seg.onnx',
+        warmup_runs=0,
+    ))
+    params = config['segmenter']['params']
+    assert params['fallback_model_path'] == '/ws/models/cubes_seg.onnx'
+    assert params['fallback_device'] == 'cpu'
+    assert params['warmup_runs'] == 0
+
+
+def test_pnp_params_forwarded_to_pnp_only():
+    config = build_pipeline_config(_params(
+        pose_estimator='pnp', pnp_fallback='none', pnp_max_reproj_px=3.0
+    ))
+    params = config['pose_estimator']['params']
+    assert params['fallback'] == 'none'
+    assert params['max_reproj_px'] == 3.0
+    assert params['kpt_min_conf'] == 0.5
+    assert params['depth_diff_ref_m'] == 0.6 and params['size'] == 0.05
+
+
 def test_voter_kwargs_min_frames_zero_means_window():
     assert voter_kwargs(_params(vote_window=7, vote_min_frames=0)) == {
         'window': 7,
         'min_ratio': 0.7,
         'min_frames': None,
+        'window_s': None,
+        'min_votes': 1,
     }
     assert voter_kwargs(_params(vote_min_frames=4))['min_frames'] == 4
     SlotVoter(**voter_kwargs(_params()))
+
+
+def test_time_window_params_reach_voter_and_tracker():
+    params = _params(
+        vote_window_s=2.0, vote_min_votes=5, vote_window=100, max_missed_s=1.0
+    )
+    vk = voter_kwargs(params)
+    assert vk['window_s'] == 2.0 and vk['min_votes'] == 5
+    SlotVoter(**vk)
+    tk = tracker_kwargs(params)
+    assert tk['vote_window_s'] == 2.0 and tk['max_missed_s'] == 1.0
+    CubeTracker(**tk)
 
 
 def test_built_config_runs_hsv_pipeline(tmp_path: Path):
