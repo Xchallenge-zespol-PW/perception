@@ -58,12 +58,19 @@ def test_sorts_left_to_right_along_y_and_numbers_1_to_n():
     ]
 
 
-def test_wrong_count_marks_all_uncertain_with_track_ids():
-    tracked = [_cube(1, 0.0), _cube(2, 0.1), _cube(3, 0.2)]
+def test_wrong_count_keeps_colours_with_track_ids():
+    tracked = [
+        _cube(1, 0.0),
+        _cube(2, 0.1, label=LABEL_GREEN),
+        _cube(3, 0.2, label=LABEL_UNCERTAIN),
+    ]
     result = assign_slots(tracked, expected_count=4, min_spacing_m=0.05)
     assert not result.valid
-    assert all(s.label == LABEL_UNCERTAIN for s in result.slots)
+    assert [s.label for s in result.slots] == [
+        LABEL_RED, LABEL_GREEN, LABEL_UNCERTAIN,
+    ]
     assert all(not s.assignment_ok for s in result.slots)
+    assert all(s.pose is not None for s in result.slots)
     assert {s.slot for s in result.slots} == {1, 2, 3}
 
 
@@ -82,7 +89,8 @@ def test_line_deviation_fails_validation():
         max_spacing_m=0.25,
     )
     assert not result.valid
-    assert all(s.label == LABEL_UNCERTAIN for s in result.slots)
+    assert all(s.label == LABEL_RED for s in result.slots)
+    assert all(not s.assignment_ok for s in result.slots)
 
 
 def test_spacing_out_of_range_fails():

@@ -37,7 +37,8 @@ def voted_to_detection_array(
     """
     Build one ``Detection3D`` per slot.
 
-    ``id`` is the slot number, ``results[0].hypothesis`` holds the canonical
+    ``id`` is the slot number, or ``t<track_id>`` when place assignment
+    failed (``assignment_ok`` False), ``results[0].hypothesis`` the canonical
     label and voted score, ``results[0].pose.pose`` and ``bbox.center`` the
     pose. ``bbox.size`` is ``cube_size`` on each axis when a pose exists and
     zero otherwise (pose fields are then identity and must be ignored).
@@ -47,7 +48,7 @@ def voted_to_detection_array(
     for slot in voted:
         det = Detection3D()
         det.header = header
-        det.id = str(slot.slot)
+        det.id = str(slot.slot) if slot.assignment_ok else f't{slot.slot}'
 
         hypothesis = ObjectHypothesisWithPose()
         hypothesis.hypothesis.class_id = slot.label

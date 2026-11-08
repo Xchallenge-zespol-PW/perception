@@ -66,3 +66,19 @@ def test_one_detection_per_slot_with_contract_fields():
     empty = array.detections[1]
     assert empty.bbox.size.x == 0.0
     assert empty.results[0].pose.pose.orientation.w == 1.0
+
+
+def test_failed_assignment_uses_track_id_prefix_and_keeps_colour():
+    header = Header(frame_id='camera_link')
+    voted = [
+        VotedSlot(22, LABEL_RED, 0.9, 10, _pose(0.1), 18.0, 1.0,
+                  track_id=22, assignment_ok=False),
+        VotedSlot(2, LABEL_GREEN, 0.8, 10, _pose(0.3), 0.0, 1.0,
+                  track_id=7, assignment_ok=True),
+    ]
+
+    array = voted_to_detection_array(voted, header, 0.05)
+
+    assert [d.id for d in array.detections] == ['t22', '2']
+    assert array.detections[0].results[0].hypothesis.class_id == LABEL_RED
+    assert array.detections[0].bbox.size.x == pytest.approx(0.05)

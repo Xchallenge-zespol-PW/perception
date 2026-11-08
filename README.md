@@ -214,14 +214,14 @@ ros2 launch g1_perception perception.launch.py config:=params_robot.yaml \
 **`/perception/cubes`** — `vision_msgs/Detection3DArray`:
 
 - **`rois_mode=image_roi`**: jedna `Detection3D` na każde ROI, w kolejności slotów (`id` = `"0"`…).
-- **`rois_mode=none`**: jedna `Detection3D` na śledzoną kostkę. Po udanej walidacji `id` = numer miejsca `"1"`…`"N"` (sort wzdłuż `slot_axis` w `target_frame`). Gdy walidacja nie przejdzie: `id` = id trackera, `class_id=uncertain`, w logu ostrzeżenie.
+- **`rois_mode=none`**: jedna `Detection3D` na śledzoną kostkę. Po udanej walidacji `id` = numer miejsca `"1"`…`"N"` (sort wzdłuż `slot_axis` w `target_frame`). Gdy walidacja nie przejdzie (np. kostki rozrzucone, nie w rzędzie): `id` = `"t<id trackera>"`, kolor i poza z głosowania zostają, w logu ostrzeżenie.
 
 | Pole | Wartość |
 |------|---------|
 | `header.stamp` | stempel obrazu kolorowego przetworzonej klatki |
 | `header.frame_id` | `target_frame`; ramka kamery, gdy `target_frame` puste albo brak TF (warning w logu) |
 | `detections[i].header` | jak `header` |
-| `detections[i].id` | numer miejsca / slotu albo id śledzenia (gdy assignment nie przeszedł) |
+| `detections[i].id` | numer miejsca / slotu albo `t<id śledzenia>` (gdy assignment nie przeszedł) |
 | `detections[i].results` | dokładnie 1 element |
 | `results[0].hypothesis.class_id` | `red` \| `green` \| `empty` \| `uncertain` |
 | `results[0].hypothesis.score` | udział klatek w oknie zgodnych z wynikiem, [0, 1] |

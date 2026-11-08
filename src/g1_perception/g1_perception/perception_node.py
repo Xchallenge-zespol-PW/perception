@@ -272,7 +272,7 @@ class PerceptionNode(Node):
                     f'(det={n_det} with_pose={n_pose} '
                     f'tracks={len(tracked_tf)}, expected='
                     f'{self._assign_kw["expected_count"]}); '
-                    'publishing track ids as uncertain',
+                    'publishing voted colours with track ids (t<N>)',
                     throttle_duration_sec=2.0,
                 )
         else:

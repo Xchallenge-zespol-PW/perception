@@ -59,10 +59,13 @@ perception_node:
     match_dist_m: 0.03
     max_missed_s: 1.0
     max_missed: 5
+    # Place assignment: "ok" only if count/line/spacing pass; else all
+    # keep their voted colour but get "bad" and id t<track>. Two clusters
+    # across the table need a large max_spacing_m.
     slot_axis: "y"
     expected_count: 4
-    max_line_deviation_m: 0.03
-    min_spacing_m: 0.04
-    max_spacing_m: 0.20
+    max_line_deviation_m: 0.08
+    min_spacing_m: 0.03
+    max_spacing_m: 0.55
 
     publish_rate_hz: 5.0

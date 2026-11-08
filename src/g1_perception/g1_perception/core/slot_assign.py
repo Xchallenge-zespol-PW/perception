@@ -8,7 +8,6 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from g1_perception.core.tracker import TrackedCube
-from g1_perception.core.types import LABEL_UNCERTAIN
 from g1_perception.core.voting import VotedSlot
 
 _AXIS_INDEX = {'x': 0, 'y': 1, 'z': 2}
@@ -34,8 +33,8 @@ def assign_slots(
     """
     Sort stable cubes along ``axis`` (ascending) and number them ``1..N``.
 
-    Validation (all must hold, else every cube becomes ``uncertain`` and
-    ``id`` stays the track id):
+    Validation (all must hold, else every cube keeps its voted colour and
+    pose, ``id`` stays the track id and ``assignment_ok`` is False):
 
     * ``len(tracked) == expected_count``
     * each cube has a pose
@@ -73,14 +72,7 @@ def assign_slots(
         return AssignmentResult(slots=slots, valid=True)
 
     slots = [
-        replace(
-            t.as_voted_slot(slot=t.track_id),
-            label=LABEL_UNCERTAIN,
-            pose=t.pose,
-            yaw_deg=t.yaw_deg,
-            yaw_consistency=t.yaw_consistency,
-            assignment_ok=False,
-        )
+        replace(t.as_voted_slot(slot=t.track_id), assignment_ok=False)
         for t in ordered
     ]
     return AssignmentResult(slots=slots, valid=False)
