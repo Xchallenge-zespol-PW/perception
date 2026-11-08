@@ -10,6 +10,9 @@ from typing import Any
 
 # Ultralytics may auto-upgrade numpy to 2.x and break Humble cv_bridge.
 os.environ.setdefault('YOLO_AUTOINSTALL', 'false')
+# Small per-cube numpy ops get slower when BLAS spreads them over all cores.
+# Not OMP_NUM_THREADS: it would also pin torch (.pt on CPU) to one thread.
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 
 import message_filters  # noqa: E402
 import numpy as np  # noqa: E402
