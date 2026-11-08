@@ -60,12 +60,15 @@ def fit_plane_ransac(
     *,
     threshold: float = 0.005,
     iterations: int = 300,
+    max_points: int = 1000,
     rng: np.random.Generator | None = None,
 ) -> tuple[NDArray[np.float64], float, int]:
     """
     Fit a plane ``n·x + d = 0`` with RANSAC, then SVD-refine inliers.
 
-    The unit normal is oriented so that it points toward the camera origin
+    Hypotheses are scored on at most ``max_points`` random points, all at
+    once; the SVD refinement and ``n_inliers`` use every point. The unit
+    normal is oriented so that it points toward the camera origin
     (``d >= 0``). Returns ``(normal, d, n_inliers)``.
     """
     pts = np.asarray(points, dtype=np.float64)
@@ -75,30 +78,26 @@ def fit_plane_ransac(
         raise ValueError('Need at least 3 points to fit a plane')
 
     gen = rng if rng is not None else np.random.default_rng(0)
-    best_count = -1
-    best_n = np.array([0.0, 0.0, 1.0])
-    best_d = 0.0
+    sample = pts
+    if pts.shape[0] > max_points:
+        sample = pts[gen.choice(pts.shape[0], size=max_points, replace=False)]
 
-    n_pts = pts.shape[0]
-    for _ in range(iterations):
-        idx = gen.choice(n_pts, size=3, replace=False)
-        p0, p1, p2 = pts[idx]
-        n = np.cross(p1 - p0, p2 - p0)
-        norm = float(np.linalg.norm(n))
-        if norm < 1e-12:
-            continue
-        n = n / norm
-        d = float(-np.dot(n, p0))
-        dist = np.abs(pts @ n + d)
-        count = int(np.count_nonzero(dist < threshold))
-        if count > best_count:
-            best_count = count
-            best_n, best_d = n, d
+    idx = gen.integers(0, sample.shape[0], size=(iterations, 3))
+    p0, p1, p2 = sample[idx[:, 0]], sample[idx[:, 1]], sample[idx[:, 2]]
+    normals = np.cross(p1 - p0, p2 - p0)
+    norms = np.linalg.norm(normals, axis=1)
+    valid = norms > 1e-12  # repeated or collinear points give no plane
+    if not np.any(valid):
+        raise ValueError('RANSAC failed to find a plane with enough inliers')
+    normals = normals[valid] / norms[valid, None]
+    ds = -np.einsum('ij,ij->i', normals, p0[valid])
 
-    if best_count < 3:
+    counts = np.count_nonzero(np.abs(sample @ normals.T + ds) < threshold, axis=0)
+    best = int(np.argmax(counts))
+    if counts[best] < 3:
         raise ValueError('RANSAC failed to find a plane with enough inliers')
 
-    inliers = pts[np.abs(pts @ best_n + best_d) < threshold]
+    inliers = pts[np.abs(pts @ normals[best] + ds[best]) < threshold]
     n, d = _fit_plane_svd(inliers)
     n, d = _orient_normal_toward_camera(n, d)
     n_inliers = int(np.count_nonzero(np.abs(pts @ n + d) < threshold))
