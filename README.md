@@ -27,6 +27,7 @@ Frame (RGB + depth + K)
 | `core.voting` | `SlotVoter`: głosowanie per slot w oknie czasowym (sekundy) albo N klatek |
 | `core.tracker` | śledzenie 3D (najbliższy sąsiad) + głosowanie per track |
 | `core.slot_assign` | numery miejsc 1..N wzdłuż osi + walidacja linii/odstępów |
+| `core.cube_registry` | ćwiczenie 1: zamrożenie układu startowego, stałe nazwy `cube_N`, odnajdywanie zgubionej kostki |
 | `core.dataset` | `load_frame` z `data/index.csv` |
 | `core.geometry` | deprojekcja, RANSAC płaszczyzny, poza kostki, `transform_pose` |
 | `core.keypoints` | kanoniczna kolejność 4 narożników górnej ściany (`c0..c3`) |
@@ -102,8 +103,14 @@ Poza repo (bind mount): `/bags/` — MCAP + `labels.csv`.
 
 ```bash
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select g1_perception
+colcon build --symlink-install --packages-up-to g1_perception
 source install/setup.bash
+```
+
+`g1_perception` zależy od `xchallenge_msgs` (wiadomości zadań, osobny pakiet w workspace X-Challenge). W devcontainerze skopiuj go do `src/` (ścieżka jest w `.gitignore`); `--packages-up-to` zbuduje go przed `g1_perception`. Na robocie kopiuje go `tools/deploy_robot.sh`.
+
+```bash
+cp -r <workspace X-Challenge>/src/xchallenge_msgs src/
 ```
 
 ### NumPy < 2 (wymóg `cv_bridge`)
@@ -204,10 +211,11 @@ ros2 launch g1_perception perception.launch.py config:=params_robot.yaml \
 | Poza | `cube_size_m`, `margin_px`, `z_min_m`, `z_max_m` (≤ 0 wyłącza) |
 | PnP (`pose_estimator: pnp`) | `kpt_min_conf`, `pnp_max_reproj_px`, `pnp_max_depth_diff_m` (przy `pnp_depth_diff_ref_m`, dalej × (z / ref)²), `pnp_max_normal_deg`, `pnp_fallback` (`geometric` \| `none`) |
 | Głosowanie / tracking | `vote_window_s` (> 0 = okno czasowe w sekundach stempli klatek; 0 = okno klatek), `vote_min_votes` (min. głosów w oknie czasowym), `vote_window` (okno klatek; w trybie czasowym limit głosów), `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`), `match_dist_m`, `max_missed_s` (> 0 = track znika po tylu sekundach bez detekcji) / `max_missed` (klatki) |
-| Miejsca (`rois_mode=none`) | `slot_axis` (`y` = L→P na robocie), `expected_count`, `max_line_deviation_m`, `min_spacing_m` / `max_spacing_m` (odstęp między sąsiednimi kostkami mierzony wzdłuż dopasowanej linii rzędu, więc rząd może leżeć pod kątem do `slot_axis`) |
+| Miejsca (`rois_mode=none`) | `slot_axis` (kolejność numerów: miejsce 1 = najmniejsza współrzędna; na robocie `x`, `cube_1` najbliżej), `expected_count`, `max_line_deviation_m`, `min_spacing_m` / `max_spacing_m` (odstęp między sąsiednimi kostkami mierzony wzdłuż dopasowanej linii rzędu, więc rząd może leżeć pod kątem do `slot_axis`) |
+| Ćwiczenie 1 (`rois_mode=none`) | `cube_colors_topic`, `cube_name_prefix`, `start_frame` (`""` = `target_frame`), `latch_s` (ile sekund stempli układ musi być stabilny przed zamrożeniem), `reid_gate_m` |
 | Tempo | `publish_rate_hz` |
 
-`params_robot.yaml` używa `rois_mode: none` (YOLO → tracker 3D → TF → numery miejsc). `params_laptop.yaml` domyślnie `image_roi`.
+`params_robot.yaml` używa `rois_mode: none` (YOLO → tracker 3D → TF → numery miejsc) i ustawień ćwiczenia 1: `target_frame: pelvis`, `slot_axis: x` (kolumna kostek wzdłuż widoku robota, środki co 6 cm, `cube_1` najbliżej), `start_frame: left_ankle_roll_link`. `params_laptop.yaml` zostaje w `camera_link` z `slot_axis: y`.
 
 ### Kontrakt wiadomości
 
@@ -235,6 +243,25 @@ Poza jest tylko dla `red` / `green`. Dla `empty`, `uncertain` albo koloru bez ud
 **`/perception/debug_image`** — `sensor_msgs/Image` `rgb8`, ramka kamery: ROI (gdy są), maski, `id:etykieta status` (+ yaw), czas inferencji w ms. Publikowany tylko, gdy ktoś subskrybuje.
 
 **`/perception/mask`** — `sensor_msgs/Image` `mono8`, ramka kamery: suma masek detekcji w bieżącej klatce (0 / 255).
+
+### Ćwiczenie 1 (`cube_sorting_node` z `unitree_controllers`)
+
+Tylko w `rois_mode=none`. Logika czyta wszystkie ramki względem `pelvis`, a stół wylicza sama z ramek `<cube>_start` i stóp.
+
+**Zamrożenie układu startowego** (`core.cube_registry`): gdy przez `latch_s` sekund (stempli klatek, więc niezależnie od GPU / CPU) przypisanie miejsc jest poprawne, wszystkie kostki mają głosowany kolor `red`/`green` i nie zmieniają się tracki, miejsca ani kolory, miejsce `n` staje się kostką `<cube_name_prefix>n` (`cube_1`…`cube_4`). Układ jest publikowany raz:
+
+| Wyjście | Zawartość |
+|---------|-----------|
+| `/tf_static` | `<start_frame> → <cube>_start` dla wszystkich kostek w jednej wiadomości (`StaticTransformBroadcaster` w rclpy trzyma tylko ostatnią); poza z głosowania. Wysyłane przed kolorami |
+| `cube_colors_topic` (`/cube_colors`) | `xchallenge_msgs/CubeColors`, reliable + transient local, depth 1: `cube_names[i]` ma kolor `colors[i]`, w kolejności miejsc. Jedna wiadomość na układ: logika zużywa ją na jedną próbę |
+
+Ramki startowe wiszą pod `start_frame`, bo logika czyta start przy każdym sprawdzeniu linii: na robocie to stopa (stoi w miejscu, gdy miednica się kołysze; bez zależności od odometrii). Bez TF `start_frame ← target_frame` układ nie jest zamrażany (warning w logu).
+
+**Bieżące pozy**: `/tf` `<target_frame> → <cube>`, stempel obrazu, tylko dla kostek widzianych w tej klatce. Nazwa trzyma się swojego tracka także wtedy, gdy kostka wyjedzie z linii. Gdy track zniknie (dłoń zasłoni kostkę, kamera obróci się z pasem) albo zagłosuje drugi kolor, nazwę przejmuje nowy track, którego współrzędna wzdłuż `slot_axis` jest w `reid_gate_m` od startowej: pchnięcie idzie w poprzek kolumny, a sąsiednia kostka jest 6 cm dalej. Log: `cube_N found again as track …`. Gdy stempel się cofnie (bag `--loop`), tracker numeruje tracki od nowa, więc każda nazwa zapomina swój track i jest odnajdywana po pozycji.
+
+**`~/reset`** (`std_srvs/Trigger`, `/perception_node/reset`): zapomina układ i tracki. Wywołaj przed każdą kolejną próbą (kolory są losowane przed każdą); nowy układ dostaje nowe ramki startowe i nową wiadomość z kolorami.
+
+Wymagania: kamera podpięta do drzewa TF robota (`pelvis` → ramka optyczna kamery); bez tego pozy zostają w ramce kamery i nic nie jest publikowane dla ćwiczenia 1.
 
 ---
 
@@ -535,6 +562,7 @@ label_map:
 | `test_pipeline.py` | rejestr, `from_config`, 1 wynik/ROI (4 ROI + 2 detekcje YOLO → 2 kolory + 2 `empty`), `uncertain` |
 | `test_labels.py` | `canonical_label`, `load_label_map`, domyślny `labels.yaml` |
 | `test_voting.py` | `SlotVoter` (większość, `min_ratio`, remis, okno), mediana pozycji, yaw przez 0/90 |
+| `test_cube_registry.py` | zamrożenie układu, śledzenie pchniętej kostki, odnajdywanie po zgubieniu, weto koloru, reset |
 | `test_frame_utils.py` | głębia mm → m, `32FC1` NaN → 0, `K`, `transform_pose` |
 | `test_debug_vis.py` | suma masek mono8, obraz debug |
 | `test_node_config.py` | parametry węzła → config pipeline / voter, przebieg z HSV |

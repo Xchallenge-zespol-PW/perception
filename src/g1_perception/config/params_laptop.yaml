@@ -68,4 +68,12 @@ perception_node:
     min_spacing_m: 0.03
     max_spacing_m: 0.55
 
+    # Exercise 1 outputs (see params_robot.yaml): with a bag the start frames
+    # stay in target_frame.
+    cube_colors_topic: /cube_colors
+    cube_name_prefix: cube_
+    start_frame: ""
+    latch_s: 1.0
+    reid_gate_m: 0.025
+
     publish_rate_hz: 5.0

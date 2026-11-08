@@ -50,5 +50,13 @@ perception_node:
     min_spacing_m: 0.04
     max_spacing_m: 0.20
 
+    # Exercise 1 outputs (rois_mode=none): xchallenge_msgs/CubeColors, static
+    # TF <cube>_start in start_frame ("" = target_frame), TF <cube>.
+    cube_colors_topic: /cube_colors
+    cube_name_prefix: cube_
+    start_frame: ""
+    latch_s: 1.0                   # stable time (frame stamps) before freezing the layout
+    reid_gate_m: 0.025             # lost cube found again within this along slot_axis
+
     # Processing / publishing rate
     publish_rate_hz: 5.0

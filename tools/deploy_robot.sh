@@ -6,6 +6,8 @@
 #
 # Domyślny host: unitree@192.168.123.164
 # Kod    → ~/humble_ws/src/perception/   (bez *.pt, *.onnx, *.engine, models/)
+# Wiadomości → ~/humble_ws/src/xchallenge_msgs/  (z XCHALLENGE_MSGS_DIR,
+#          domyślnie ../xchallenge_msgs obok repo)
 # Modele → ~/humble_ws/models/<basename>  (= /ws/models/ w kontenerze)
 # Build  → ~/g1_humble/humble.sh run … source ROS + colcon build
 #
@@ -22,6 +24,9 @@ Użycie: deploy_robot.sh <model> [<model>...] [user@host]
   model        lokalny plik .pt / .onnx / .engine (imgsz 640); kopiowany do
                ~/humble_ws/models/ na robocie (= /ws/models/ w kontenerze)
   user@host    domyślnie unitree@192.168.123.164
+
+Pakiet xchallenge_msgs (wiadomości zadań, potrzebny g1_perception) bierze
+z XCHALLENGE_MSGS_DIR, domyślnie z katalogu ../xchallenge_msgs obok repo.
 
 Przykład:
   ./tools/deploy_robot.sh models/cubes_seg.pt models/cubes_seg.onnx
@@ -75,17 +80,27 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+MSGS_DIR="${XCHALLENGE_MSGS_DIR:-$REPO_ROOT/../xchallenge_msgs}"
+
+if [[ ! -f "$MSGS_DIR/package.xml" ]]; then
+  echo "BLAD: nie ma pakietu xchallenge_msgs w: $MSGS_DIR" >&2
+  echo "      ustaw XCHALLENGE_MSGS_DIR=<ścieżka do xchallenge_msgs>" >&2
+  exit 1
+fi
+MSGS_DIR="$(cd "$MSGS_DIR" && pwd)"
 
 REMOTE_CODE="humble_ws/src/perception"
+REMOTE_MSGS="humble_ws/src/xchallenge_msgs"
 REMOTE_MODELS="humble_ws/models"
 
 echo "==> Host:  $HOST"
 echo "==> Kod:   $REPO_ROOT/  ->  ${HOST}:${REMOTE_CODE}/"
+echo "==> Msgs:  $MSGS_DIR/  ->  ${HOST}:${REMOTE_MSGS}/"
 for model in "${MODELS[@]}"; do
   echo "==> Model: $model  ->  ${HOST}:${REMOTE_MODELS}/$(basename "$model")"
 done
 
-ssh "$HOST" "mkdir -p '${REMOTE_CODE}' '${REMOTE_MODELS}'"
+ssh "$HOST" "mkdir -p '${REMOTE_CODE}' '${REMOTE_MSGS}' '${REMOTE_MODELS}'"
 
 rsync -avz --delete \
   --exclude '.git/' \
@@ -103,6 +118,13 @@ rsync -avz --delete \
   --exclude '__pycache__/' \
   --exclude '.pytest_cache/' \
   "${REPO_ROOT}/" "${HOST}:${REMOTE_CODE}/"
+
+rsync -avz --delete \
+  --exclude '.git/' \
+  --exclude 'build/' \
+  --exclude 'install/' \
+  --exclude 'log/' \
+  "${MSGS_DIR}/" "${HOST}:${REMOTE_MSGS}/"
 
 rsync -avz "${MODELS[@]}" "${HOST}:${REMOTE_MODELS}/"
 
@@ -137,6 +159,9 @@ Na robocie (w kontenerze humble):
   export YOLO_AUTOINSTALL=false
   cd /ws
   ros2 launch g1_perception perception.launch.py config:=params_robot.yaml
+
+  # Przed każdą kolejną próbą ćwiczenia 1 (nowy układ kostek):
+  ros2 service call /perception_node/reset std_srvs/srv/Trigger
 
   # Wymuszenie CPU albo inny model:
   ros2 launch g1_perception perception.launch.py config:=params_robot.yaml \\

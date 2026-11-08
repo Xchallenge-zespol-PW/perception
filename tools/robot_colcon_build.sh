@@ -13,4 +13,5 @@ cd /ws
 # (canonicalize_version(..., strip_trailing_zero=...) TypeError). Build with
 # distro packages; runtime still uses --user installs.
 export PYTHONNOUSERSITE=1
-colcon build --symlink-install --packages-select g1_perception
+# --packages-up-to also builds xchallenge_msgs from /ws/src (deploy_robot.sh).
+colcon build --symlink-install --packages-up-to g1_perception

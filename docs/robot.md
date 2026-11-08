@@ -129,8 +129,10 @@ Te same klucze parametrów — różnią się wartościami pod środowisko.
 2. Paczki ROS z `apt`: `ros-humble-vision-msgs` (wiadomości `/perception/cubes`) i `ros-humble-rosbag2-storage-mcap` (nagrania MCAP) — w kontenerze humble wpisane na stałe w `~/g1_humble/paczki-apt.txt`, bo `rebuild` usuwa ręczne instalacje.  
 3. `YOLO_AUTOINSTALL=false`, `numpy` 1.x, `cv_bridge` + `onnxruntime` importują się; `python3 src/perception/tools/jetson_gpu_check.py` bez `FAIL` (TensorRT na GPU; torch z CUDA niepotrzebny).  
 4. `/ws/models/cubes_seg.engine` (zbudowany na tym Jetsonie) i `/ws/models/cubes_seg.onnx` (imgsz 640) na miejscu.  
-5. `colcon build` bez błędów + `source /ws/install/setup.bash`.  
-6. Launch z `params_robot.yaml`; w logu `Inference backend engine:0` (nie `… fallback`); `/perception/cubes` i opcjonalnie debug image.
+5. `colcon build` bez błędów (`--packages-up-to g1_perception`, buduje też `xchallenge_msgs`) + `source /ws/install/setup.bash`.  
+6. Kamera podpięta do drzewa TF robota: `ros2 run tf2_ros tf2_echo pelvis camera_color_optical_frame` zwraca transformację.  
+7. Launch z `params_robot.yaml`; w logu `Inference backend engine:0` (nie `… fallback`); `/perception/cubes` i opcjonalnie debug image.  
+8. Ćwiczenie 1: w logu `start layout frozen: cube_1=…`, `ros2 topic echo /cube_colors --qos-durability transient_local --qos-reliability reliable`, `tf2_echo pelvis cube_1_start`. Przed każdą kolejną próbą `ros2 service call /perception_node/reset std_srvs/srv/Trigger`.
 
 ## Wyniki testów na robocie
 

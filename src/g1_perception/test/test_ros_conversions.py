@@ -1,4 +1,4 @@
-"""Tests for VotedSlot → vision_msgs/Detection3DArray conversion."""
+"""Tests for perception results → ROS message conversion."""
 
 from __future__ import annotations
 
@@ -6,9 +6,12 @@ import numpy as np
 import pytest
 
 pytest.importorskip('vision_msgs.msg')
+pytest.importorskip('xchallenge_msgs.msg')
 
 from std_msgs.msg import Header  # noqa: E402
+from xchallenge_msgs.msg import CubeColors  # noqa: E402
 
+from g1_perception.core.cube_registry import NamedCube  # noqa: E402
 from g1_perception.core.types import (  # noqa: E402
     LABEL_EMPTY,
     LABEL_GREEN,
@@ -17,7 +20,11 @@ from g1_perception.core.types import (  # noqa: E402
     Pose,
 )
 from g1_perception.core.voting import VotedSlot  # noqa: E402
-from g1_perception.ros_conversions import voted_to_detection_array  # noqa: E402
+from g1_perception.ros_conversions import (  # noqa: E402
+    cube_colors_msg,
+    pose_to_transform,
+    voted_to_detection_array,
+)
 
 
 def _pose(x: float) -> Pose:
@@ -82,3 +89,37 @@ def test_failed_assignment_uses_track_id_prefix_and_keeps_colour():
     assert [d.id for d in array.detections] == ['t22', '2']
     assert array.detections[0].results[0].hypothesis.class_id == LABEL_RED
     assert array.detections[0].bbox.size.x == pytest.approx(0.05)
+
+
+def test_pose_to_transform_places_the_child_at_the_pose():
+    header = Header(frame_id='pelvis')
+    header.stamp.sec = 7
+
+    tf = pose_to_transform(_pose(0.4), header, 'cube_1')
+
+    assert tf.header.frame_id == 'pelvis' and tf.header.stamp.sec == 7
+    assert tf.child_frame_id == 'cube_1'
+    t = tf.transform.translation
+    assert (t.x, t.y, t.z) == pytest.approx((0.4, 0.2, 0.9))
+    q = tf.transform.rotation
+    assert (q.x, q.y, q.z, q.w) == pytest.approx(
+        (0.0, 0.0, 0.38268343, 0.92387953)
+    )
+
+
+def _named(name: str, label: str) -> NamedCube:
+    return NamedCube(name, label, _pose(0.1), None, 1)
+
+
+def test_cube_colors_pairs_names_and_colours_in_order():
+    msg = cube_colors_msg([
+        _named('cube_1', LABEL_GREEN), _named('cube_2', LABEL_RED),
+    ])
+
+    assert list(msg.cube_names) == ['cube_1', 'cube_2']
+    assert list(msg.colors) == [CubeColors.GREEN, CubeColors.RED]
+
+
+def test_cube_colors_rejects_a_cube_without_colour():
+    with pytest.raises(ValueError):
+        cube_colors_msg([_named('cube_1', LABEL_UNCERTAIN)])

@@ -55,6 +55,11 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'max_line_deviation_m': 0.03,
     'min_spacing_m': 0.04,
     'max_spacing_m': 0.20,
+    'cube_colors_topic': '/cube_colors',
+    'cube_name_prefix': 'cube_',
+    'start_frame': '',
+    'latch_s': 1.0,
+    'reid_gate_m': 0.025,
     'publish_rate_hz': 5.0,
     'sync_queue_size': 10,
     'sync_slop_s': 0.05,
@@ -156,6 +161,16 @@ def slot_assign_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
         'max_line_deviation_m': float(params['max_line_deviation_m']),
         'min_spacing_m': float(params['min_spacing_m']),
         'max_spacing_m': float(params['max_spacing_m']),
+    }
+
+
+def registry_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Return :class:`CubeRegistry` kwargs; the cubes line up along slot_axis."""
+    return {
+        'axis': str(params['slot_axis']),
+        'name_prefix': str(params['cube_name_prefix']),
+        'latch_s': float(params['latch_s']),
+        'reid_gate_m': float(params['reid_gate_m']),
     }
 
 

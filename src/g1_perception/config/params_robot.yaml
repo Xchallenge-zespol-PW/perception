@@ -17,8 +17,10 @@ perception_node:
     output_topic: /perception/cubes
     debug_image_topic: /perception/debug_image
     mask_topic: /perception/mask
-    # On the robot set the G1 body / torso frame once TF is available.
-    target_frame: camera_link
+    # Frame of the cube poses and of the TF <cube>: the logic node of
+    # exercise 1 reads everything relative to pelvis. Needs the camera
+    # connected to the robot TF tree (camera calibration).
+    target_frame: pelvis
     tf_timeout_s: 0.1
 
     # Pipeline: TensorRT engine on the GPU; if it cannot load (no CUDA, bad
@@ -62,10 +64,21 @@ perception_node:
     match_dist_m: 0.03
     max_missed_s: 1.0
     max_missed: 5
-    slot_axis: "y"
+    # Exercise 1 (regulations 4.4): a column of 4 cubes along the robot's
+    # view (pelvis x), centres 6 cm apart. Place 1 = nearest cube.
+    slot_axis: "x"
     expected_count: 4
     max_line_deviation_m: 0.03
     min_spacing_m: 0.04
-    max_spacing_m: 0.20
+    max_spacing_m: 0.10
+
+    # Exercise 1 outputs (cube_sorting_node in unitree_controllers)
+    cube_colors_topic: /cube_colors   # xchallenge_msgs/CubeColors, transient local
+    cube_name_prefix: cube_           # cube_1..cube_4 = expected_cube_names of task_1.yaml
+    # Static <cube>_start frames: the feet stand still on the floor, while the
+    # pelvis sways. "" = target_frame.
+    start_frame: left_ankle_roll_link
+    latch_s: 1.0                      # stable time (frame stamps) before the start layout is frozen
+    reid_gate_m: 0.025                # lost cube found again within this along slot_axis
 
     publish_rate_hz: 5.0

@@ -1,15 +1,20 @@
-"""Convert voted slot results to ROS messages (no rclpy node logic)."""
+"""Convert perception results to ROS messages (no rclpy node logic)."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
 from geometry_msgs.msg import Pose as PoseMsg
+from geometry_msgs.msg import TransformStamped
 from std_msgs.msg import Header
 from vision_msgs.msg import Detection3D, Detection3DArray, ObjectHypothesisWithPose
+from xchallenge_msgs.msg import CubeColors
 
-from g1_perception.core.types import Pose
+from g1_perception.core.cube_registry import NamedCube
+from g1_perception.core.types import LABEL_GREEN, LABEL_RED, Pose
 from g1_perception.core.voting import VotedSlot
+
+_CUBE_COLORS = {LABEL_RED: CubeColors.RED, LABEL_GREEN: CubeColors.GREEN}
 
 
 def pose_to_msg(pose: Pose | None) -> PoseMsg:
@@ -62,3 +67,42 @@ def voted_to_detection_array(
 
         array.detections.append(det)
     return array
+
+
+def pose_to_transform(
+    pose: Pose,
+    header: Header,
+    child_frame_id: str,
+) -> TransformStamped:
+    """Build the TF ``header.frame_id -> child_frame_id`` placed at ``pose``."""
+    msg = TransformStamped()
+    msg.header = header
+    msg.child_frame_id = child_frame_id
+    (
+        msg.transform.translation.x,
+        msg.transform.translation.y,
+        msg.transform.translation.z,
+    ) = (float(v) for v in pose.position)
+    (
+        msg.transform.rotation.x,
+        msg.transform.rotation.y,
+        msg.transform.rotation.z,
+        msg.transform.rotation.w,
+    ) = (float(v) for v in pose.quat)
+    return msg
+
+
+def cube_colors_msg(cubes: Sequence[NamedCube]) -> CubeColors:
+    """
+    Build ``xchallenge_msgs/CubeColors``: ``cube_names[i]`` has ``colors[i]``.
+
+    Raises ValueError for a label other than red / green, which the logic
+    node of exercise 1 would reject.
+    """
+    msg = CubeColors()
+    for cube in cubes:
+        if cube.label not in _CUBE_COLORS:
+            raise ValueError(f'{cube.name}: no CubeColors colour for {cube.label!r}')
+        msg.cube_names.append(cube.name)
+        msg.colors.append(_CUBE_COLORS[cube.label])
+    return msg
