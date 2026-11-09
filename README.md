@@ -210,7 +210,7 @@ ros2 launch g1_perception perception.launch.py config:=params_robot.yaml \
 | Pipeline | `segmenter` (`yolo_seg` \| `hsv`), `pose_estimator` (`geometric` \| `centroid` \| `pnp`), `model_path`, `device`, `fallback_model_path` / `fallback_device` (gdy `model_path` nie ruszy na `device`), `warmup_runs` (predykcje na pustym obrazie przy starcie), `conf`, `verify_hsv`, `rois_mode` (`none` \| `image_roi`), `rois_path` / `hsv_path` / `labels_path` (`""` = domyślne; w `none` brak pliku ROI nie jest błędem) |
 | Poza | `cube_size_m`, `margin_px`, `z_min_m`, `z_max_m` (≤ 0 wyłącza) |
 | PnP (`pose_estimator: pnp`) | `kpt_min_conf`, `pnp_max_reproj_px`, `pnp_max_depth_diff_m` (przy `pnp_depth_diff_ref_m`, dalej × (z / ref)²), `pnp_max_normal_deg`, `pnp_fallback` (`geometric` \| `none`) |
-| Głosowanie / tracking | `vote_window_s` (> 0 = okno czasowe w sekundach stempli klatek; 0 = okno klatek), `vote_min_votes` (min. głosów w oknie czasowym), `vote_window` (okno klatek; w trybie czasowym limit głosów), `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`), `match_dist_m`, `max_missed_s` (> 0 = track znika po tylu sekundach bez detekcji) / `max_missed` (klatki) |
+| Głosowanie / tracking | `vote_window_s` (> 0 = okno czasowe w sekundach stempli klatek; 0 = okno klatek), `vote_min_votes` (min. głosów w oknie czasowym), `vote_window` (okno klatek; w trybie czasowym limit głosów), `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`), `match_dist_m`, `max_missed_s` (> 0 = track znika po tylu sekundach bez detekcji) / `max_missed` (klatki), `fresh_s` (> 0 = do miejsc i zamrożenia liczą się tylko tracki widziane w ostatnich tylu sekundach; rozjechany track nie robi z jednej kostki dwóch) |
 | Miejsca (`rois_mode=none`) | `slot_axis` (kolejność numerów: miejsce 1 = najmniejsza współrzędna; na robocie `x`, `cube_1` najbliżej), `expected_count`, `max_line_deviation_m`, `min_spacing_m` / `max_spacing_m` (odstęp między sąsiednimi kostkami mierzony wzdłuż dopasowanej linii rzędu, więc rząd może leżeć pod kątem do `slot_axis`) |
 | Ćwiczenie 1 (`rois_mode=none`) | `cube_colors_topic`, `cube_name_prefix`, `start_frame` (`""` = `target_frame`), `latch_s` (ile sekund stempli układ musi być stabilny przed zamrożeniem), `reid_gate_m` |
 | Tempo | `publish_rate_hz` |
@@ -227,7 +227,7 @@ ros2 launch g1_perception perception.launch.py config:=params_robot.yaml \
 | Pole | Wartość |
 |------|---------|
 | `header.stamp` | stempel obrazu kolorowego przetworzonej klatki |
-| `header.frame_id` | `target_frame`; ramka kamery, gdy `target_frame` puste albo brak TF (warning w logu) |
+| `header.frame_id` | `target_frame` (tracker śledzi kostki już w tej ramce, bo kamera rusza się z tułowiem); ramka kamery, gdy `target_frame` puste. Przy `rois_mode=none` i braku TF klatka nie jest śledzona: pusta lista w ramce kamery, warning w logu |
 | `detections[i].header` | jak `header` |
 | `detections[i].id` | numer miejsca / slotu albo `t<id śledzenia>` (gdy assignment nie przeszedł) |
 | `detections[i].results` | dokładnie 1 element |
@@ -261,7 +261,7 @@ Ramki startowe wiszą pod `start_frame`, bo logika czyta start przy każdym spra
 
 **`~/reset`** (`std_srvs/Trigger`, `/perception_node/reset`): zapomina układ i tracki. Wywołaj przed każdą kolejną próbą (kolory są losowane przed każdą); nowy układ dostaje nowe ramki startowe i nową wiadomość z kolorami.
 
-Wymagania: kamera podpięta do drzewa TF robota (`pelvis` → ramka optyczna kamery); bez tego pozy zostają w ramce kamery i nic nie jest publikowane dla ćwiczenia 1.
+Wymagania: kamera podpięta do drzewa TF robota (`pelvis` → ramka optyczna kamery); bez tego klatki nie są śledzone (`/perception/cubes` pusty, debug image pokazuje surowe detekcje) i nic nie jest publikowane dla ćwiczenia 1.
 
 ---
 

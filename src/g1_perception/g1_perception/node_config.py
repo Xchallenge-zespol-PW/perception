@@ -48,6 +48,7 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'vote_window_s': 0.0,
     'vote_min_votes': 1,
     'max_missed_s': 0.0,
+    'fresh_s': 0.0,
     'match_dist_m': 0.03,
     'max_missed': 5,
     'slot_axis': 'y',

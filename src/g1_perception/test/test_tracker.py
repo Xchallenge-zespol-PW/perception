@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from g1_perception.core.tracker import CubeTracker
+from g1_perception.core.tracker import CubeTracker, fresh_tracks
 from g1_perception.core.types import (
     LABEL_GREEN,
     LABEL_RED,
@@ -125,3 +125,29 @@ def test_time_based_tracker_needs_stamp_and_resets_on_loop():
     tracker.update([_obs(LABEL_RED, 0.0, 0.0)], 10.0)
     tracked = tracker.update([_obs(LABEL_GREEN, 0.5, 0.0)], 0.1)
     assert [t.track_id for t in tracked] == [1]  # ids restart after reset
+
+
+def test_split_track_ghost_is_not_fresh():
+    tracker = CubeTracker(
+        vote_window=100, vote_window_s=2.0, vote_min_votes=1, max_missed_s=1.0
+    )
+    for i in range(3):
+        tracker.update([_obs(LABEL_RED, 0.0, 0.0)], stamp=0.1 * i)
+    # The cube jumps beyond match_dist_m: new track, old one still alive.
+    for i in range(3, 8):
+        tracked = tracker.update([_obs(LABEL_RED, 0.05, 0.0)], stamp=0.1 * i)
+
+    assert len(tracked) == 2
+    old, new = sorted(tracked, key=lambda t: t.track_id)
+    assert old.last_seen == pytest.approx(0.2)
+    assert new.last_seen == pytest.approx(0.7)
+    fresh = fresh_tracks(tracked, 0.7, 0.3)
+    assert [t.track_id for t in fresh] == [new.track_id]
+
+
+def test_fresh_tracks_disabled_keeps_all():
+    tracker = CubeTracker(vote_window=100, vote_window_s=2.0, max_missed_s=1.0)
+    tracker.update([_obs(LABEL_RED, 0.0, 0.0)], stamp=0.0)
+    tracked = tracker.update([], stamp=0.5)
+    assert len(fresh_tracks(tracked, 0.5, 0.0)) == 1
+    assert fresh_tracks(tracked, 0.5, 0.3) == []

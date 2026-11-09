@@ -63,6 +63,9 @@ perception_node:
     vote_min_frames: 0
     match_dist_m: 0.03
     max_missed_s: 1.0
+    # Slots and the start layout count only tracks seen within fresh_s:
+    # a split track (new id after a jump) stays alive max_missed_s.
+    fresh_s: 0.3
     max_missed: 5
     # Exercise 1 (regulations 4.4): a column of 4 cubes along the robot's
     # view (pelvis x), centres 6 cm apart. Place 1 = nearest cube.

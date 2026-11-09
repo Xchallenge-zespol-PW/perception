@@ -14,6 +14,7 @@ os.environ.setdefault('YOLO_AUTOINSTALL', 'false')
 # Not OMP_NUM_THREADS: it would also pin torch (.pt on CPU) to one thread.
 os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 
+import cv2  # noqa: E402
 import message_filters  # noqa: E402
 import numpy as np  # noqa: E402
 import rclpy  # noqa: E402
@@ -55,7 +56,11 @@ from g1_perception.core.frame_utils import (  # noqa: E402
 )
 from g1_perception.core.geometry import transform_pose  # noqa: E402
 from g1_perception.core.slot_assign import AssignmentResult, assign_slots  # noqa: E402
-from g1_perception.core.tracker import CubeTracker, TrackedCube  # noqa: E402
+from g1_perception.core.tracker import (  # noqa: E402
+    CubeTracker,
+    fresh_tracks,
+    TrackedCube,
+)
 from g1_perception.core.types import Frame, SlotResult  # noqa: E402
 from g1_perception.core.voting import SlotVoter, VotedSlot  # noqa: E402
 from g1_perception.node_config import (  # noqa: E402
@@ -170,6 +175,7 @@ class PerceptionNode(Node):
         self._voter = SlotVoter(**voter_kwargs(p))
         self._tracker = CubeTracker(**tracker_kwargs(p)) if self._free else None
         self._assign_kw = slot_assign_kwargs(p)
+        self._fresh_s = float(p['fresh_s'])
         self._registry = (
             CubeRegistry(**registry_kwargs(p)) if self._free else None
         )
@@ -350,34 +356,39 @@ class PerceptionNode(Node):
             assert self._tracker is not None and self._registry is not None
             n_det = len(results)
             n_pose = sum(1 for r in results if r.pose is not None)
-            with self._state_lock:
-                tracked = self._tracker.update(results, frame.stamp)
-                tracked_tf, frame_id = self._tracks_to_target(
-                    tracked, camera_header
-                )
-                assignment = assign_slots(tracked_tf, **self._assign_kw)
-                # Camera-frame poses (no TF) must not name or move the cubes.
-                if not self._target_frame or frame_id == self._target_frame:
+            # Track in target_frame: the camera moves with the torso, the
+            # cubes do not. Without its TF the frame is shown but not tracked.
+            results_tf, frame_id = self._results_to_target(
+                results, camera_header
+            )
+            if results_tf is None:
+                voted = []
+                debug_results = results
+                with self._state_lock:
+                    start = self._start
+            else:
+                with self._state_lock:
+                    tracked = self._tracker.update(results_tf, frame.stamp)
+                    fresh = fresh_tracks(tracked, frame.stamp, self._fresh_s)
+                    assignment = assign_slots(fresh, **self._assign_kw)
                     cubes = self._update_registry(
-                        assignment, tracked_tf, camera_header, frame_id,
+                        assignment, tracked, camera_header, frame_id,
                         frame.stamp,
                     )
-                latched = self._registry.latched
-                start = self._start
-            voted = assignment.slots
-            debug_results = _debug_results_from_tracks(
-                tracked_tf, voted
-            )
-            # Once the layout is frozen, pushed cubes leave the line on purpose.
-            if not assignment.valid and not latched:
-                self.get_logger().warning(
-                    'slot assignment invalid '
-                    f'(det={n_det} with_pose={n_pose} '
-                    f'tracks={len(tracked_tf)}, expected='
-                    f'{self._assign_kw["expected_count"]}); '
-                    'publishing voted colours with track ids (t<N>)',
-                    throttle_duration_sec=2.0,
-                )
+                    latched = self._registry.latched
+                    start = self._start
+                voted = assignment.slots
+                debug_results = _debug_results_from_tracks(fresh, voted)
+                # Once the layout is frozen, pushed cubes leave the line on purpose.
+                if not assignment.valid and not latched:
+                    self.get_logger().warning(
+                        'slot assignment invalid '
+                        f'(det={n_det} with_pose={n_pose} '
+                        f'tracks={len(fresh)}, expected='
+                        f'{self._assign_kw["expected_count"]}); '
+                        'publishing voted colours with track ids (t<N>)',
+                        throttle_duration_sec=2.0,
+                    )
         else:
             with self._state_lock:
                 voted_cam = self._voter.update(results, frame.stamp)
@@ -664,28 +675,32 @@ class PerceptionNode(Node):
             for v in voted
         ], target
 
-    def _tracks_to_target(
+    def _results_to_target(
         self,
-        tracked: list[TrackedCube],
+        results: list[SlotResult],
         camera_header: Header,
-    ) -> tuple[list[TrackedCube], str]:
-        """Transform track poses to ``target_frame`` before slot assignment."""
-        tf = self._lookup_tf(camera_header)
+    ) -> tuple[list[SlotResult] | None, str]:
+        """
+        Transform result poses to ``target_frame`` before tracking.
+
+        Returns ``(None, camera frame)`` when ``target_frame`` is set but its
+        TF is missing: mixing frames would split every track.
+        """
+        source = camera_header.frame_id
+        target = self._target_frame
+        if not target or target == source:
+            return list(results), source
+        tf = self._lookup(
+            target, source, camera_header, 'frame not tracked'
+        )
         if tf is None:
-            return tracked, camera_header.frame_id
-        translation, rotation, target = tf
-        out: list[TrackedCube] = []
-        for t in tracked:
-            if t.pose is None:
-                out.append(t)
-            else:
-                out.append(
-                    replace(
-                        t,
-                        pose=transform_pose(t.pose, translation, rotation),
-                    )
-                )
-        return out, target
+            return None, source
+        translation, rotation = tf
+        return [
+            replace(r, pose=transform_pose(r.pose, translation, rotation))
+            if r.pose is not None else r
+            for r in results
+        ], target
 
 
 def _debug_results_from_tracks(
@@ -713,6 +728,9 @@ def _debug_results_from_tracks(
 def main(args: list[str] | None = None) -> None:
     """Entry point for ``ros2 run g1_perception perception_node``."""
     os.environ.setdefault('YOLO_AUTOINSTALL', 'false')
+    # Per-cube resizes are too small to gain from OpenCV's pool: with all
+    # cores it used ~3x the CPU time at the same speed.
+    cv2.setNumThreads(1)
     rclpy.init(args=args)
     node = PerceptionNode()
     executor = MultiThreadedExecutor()

@@ -34,6 +34,7 @@ class TrackedCube:
     yaw_consistency: float | None
     detection: Detection | None
     missed: int
+    last_seen: float = 0.0  # frame stamp (s) of the last matched detection
 
     def as_voted_slot(self, slot: int | None = None) -> VotedSlot:
         """Convert to :class:`VotedSlot` (``slot`` defaults to ``track_id``)."""
@@ -48,6 +49,22 @@ class TrackedCube:
             track_id=self.track_id,
             assignment_ok=True,
         )
+
+
+def fresh_tracks(
+    tracked: Sequence[TrackedCube],
+    stamp: float,
+    max_age_s: float,
+) -> list[TrackedCube]:
+    """
+    Keep tracks seen within ``max_age_s`` of ``stamp`` (all when <= 0).
+
+    A cube whose track split (new id after a jump) leaves the old track
+    alive until it expires; counting it would make one cube two.
+    """
+    if max_age_s <= 0.0:
+        return list(tracked)
+    return [t for t in tracked if stamp - t.last_seen <= max_age_s]
 
 
 class CubeTracker:
@@ -212,6 +229,7 @@ class CubeTracker:
                     yaw_consistency=v.yaw_consistency,
                     detection=tr.last_detection,
                     missed=tr.missed,
+                    last_seen=tr.last_seen,
                 )
             )
         return out
