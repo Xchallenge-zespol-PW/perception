@@ -28,7 +28,7 @@ perception_node:
     fallback_model_path: ""
     fallback_device: cpu
     warmup_runs: 1
-    conf: 0.25
+    conf: 0.35                    # 0.25 let low-score duplicates through (5th track)
     verify_hsv: false
     rois_mode: none
     rois_path: ""
