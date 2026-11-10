@@ -61,7 +61,11 @@ def test_yolo_geometric_config_from_defaults():
     }
     assert config['pose_estimator'] == {
         'name': 'geometric',
-        'params': {'size': 0.05, 'margin': 20, 'z_min': 0.1, 'z_max': 2.0},
+        'params': {
+            'size': 0.05, 'margin': 20, 'z_min': 0.1, 'z_max': 2.0,
+            'min_height': 0.01, 'min_above_ratio': 0.5,
+            'footprint_min': 0.02, 'footprint_max': 0.13,
+        },
     }
     assert 'rois_path' not in config and 'labels_path' not in config
 

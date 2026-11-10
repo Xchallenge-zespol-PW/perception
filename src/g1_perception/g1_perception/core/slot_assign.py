@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from itertools import combinations
 
 import numpy as np
 
@@ -11,6 +12,8 @@ from g1_perception.core.tracker import TrackedCube
 from g1_perception.core.voting import VotedSlot
 
 _AXIS_INDEX = {'x': 0, 'y': 1, 'z': 2}
+# Most tracks searched for the one valid subset (C(8, 4) = 70 checks).
+_MAX_CANDIDATES = 8
 
 
 @dataclass(frozen=True)
@@ -36,7 +39,10 @@ def assign_slots(
     Validation (all must hold, else every cube keeps its voted colour and
     pose, ``id`` stays the track id and ``assignment_ok`` is False):
 
-    * ``len(tracked) == expected_count``
+    * ``len(tracked) == expected_count``, or more tracks of which exactly
+      one ``expected_count`` subset passes the checks below (an extra
+      detection off the row, e.g. tape, is dropped; two passing subsets are
+      ambiguous and fail)
     * each cube has a pose
     * max distance to the least-squares line ≤ ``max_line_deviation_m``
     * consecutive gaps measured **along that line** in
@@ -56,13 +62,20 @@ def assign_slots(
         key=lambda t: float(t.pose.position[idx]),  # type: ignore[index]
     )
 
-    valid = _validate(
-        ordered,
-        expected_count=expected_count,
-        max_line_deviation_m=max_line_deviation_m,
-        min_spacing_m=min_spacing_m,
-        max_spacing_m=max_spacing_m,
-    )
+    checks = {
+        'expected_count': expected_count,
+        'max_line_deviation_m': max_line_deviation_m,
+        'min_spacing_m': min_spacing_m,
+        'max_spacing_m': max_spacing_m,
+    }
+    valid = _validate(ordered, **checks)
+    if not valid and expected_count < len(ordered) <= _MAX_CANDIDATES:
+        passing = [
+            subset for subset in combinations(ordered, expected_count)
+            if _validate(subset, **checks)
+        ]
+        if len(passing) == 1:
+            ordered, valid = list(passing[0]), True
 
     if valid:
         slots = [

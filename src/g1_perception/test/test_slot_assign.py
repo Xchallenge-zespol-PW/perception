@@ -137,3 +137,27 @@ def test_row_at_an_angle_too_close_fails():
         min_spacing_m=0.04, max_spacing_m=0.20,
     )
     assert not result.valid
+
+
+def test_extra_track_off_the_row_is_dropped():
+    # Tape seen as a fifth cube 25 cm off the row.
+    tracked = [
+        _cube(1, 0.0),
+        _cube(2, 0.1, label=LABEL_GREEN),
+        _cube(9, 0.15, x=0.75),
+        _cube(3, 0.2),
+        _cube(4, 0.3, label=LABEL_GREEN),
+    ]
+    result = assign_slots(tracked, expected_count=4, min_spacing_m=0.05)
+    assert result.valid
+    assert [s.track_id for s in result.slots] == [1, 2, 3, 4]
+    assert [s.slot for s in result.slots] == [1, 2, 3, 4]
+
+
+def test_two_passing_subsets_are_ambiguous():
+    # A fifth detection on the row extension: shifting by one also passes.
+    tracked = [_cube(i + 1, 0.1 * i) for i in range(5)]
+    result = assign_slots(tracked, expected_count=4, min_spacing_m=0.05)
+    assert not result.valid
+    assert len(result.slots) == 5
+    assert all(not s.assignment_ok for s in result.slots)

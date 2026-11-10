@@ -194,14 +194,7 @@ def cube_pose_on_table(
     if pts.shape[0] < 4:
         raise ValueError('Need at least 4 points for cube_pose_on_table')
 
-    projected = project_points_to_plane(pts, n, d)
-    origin = projected.mean(axis=0)
-    u, v = plane_basis(n)
-
-    coords = np.column_stack(
-        ((projected - origin) @ u, (projected - origin) @ v)
-    ).astype(np.float32)
-    rect = cv2.minAreaRect(coords)
+    origin, u, v, rect = _rect_on_plane(pts, n, d)
     (c2x, c2y), (_w, _h), angle_deg = rect
 
     yaw_deg = float(angle_deg) % 90.0
@@ -215,6 +208,56 @@ def cube_pose_on_table(
     score = float(np.mean(dist < max(size * 0.6, 0.01)))
 
     return Pose(position=position, quat=quat, score=score)
+
+
+def points_above_plane(
+    points: NDArray[np.float64],
+    plane: Plane,
+    min_height: float,
+    max_height: float,
+) -> tuple[NDArray[np.float64], float]:
+    """
+    Keep points with height above ``plane`` in ``[min_height, max_height]``.
+
+    Returns ``(kept, kept fraction)``. Mask pixels that bleed onto the table
+    have height ~0; flat objects (tape) have almost no points left.
+    """
+    n, d = plane
+    pts = np.asarray(points, dtype=np.float64)
+    if pts.shape[0] == 0:
+        return pts, 0.0
+    height = pts @ np.asarray(n, dtype=np.float64) + d
+    keep = (height >= min_height) & (height <= max_height)
+    return pts[keep], float(np.count_nonzero(keep)) / pts.shape[0]
+
+
+def footprint_on_plane(
+    points: NDArray[np.float64],
+    plane: Plane,
+) -> tuple[float, float]:
+    """Return ``(short, long)`` sides (m) of the points' rectangle on ``plane``."""
+    n, d = plane
+    pts = np.asarray(points, dtype=np.float64)
+    if pts.shape[0] < 3:
+        return 0.0, 0.0
+    _origin, _u, _v, rect = _rect_on_plane(pts, np.asarray(n, np.float64), d)
+    w, h = rect[1]
+    return float(min(w, h)), float(max(w, h))
+
+
+def _rect_on_plane(
+    pts: NDArray[np.float64],
+    n: NDArray[np.float64],
+    d: float,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], Any]:
+    """Project onto the plane and fit ``cv2.minAreaRect`` in its basis."""
+    projected = project_points_to_plane(pts, n, d)
+    origin = projected.mean(axis=0)
+    u, v = plane_basis(n)
+    coords = np.column_stack(
+        ((projected - origin) @ u, (projected - origin) @ v)
+    ).astype(np.float32)
+    return origin, u, v, cv2.minAreaRect(coords)
 
 
 def project_points_to_plane(

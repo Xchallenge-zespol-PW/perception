@@ -8,6 +8,8 @@ import pytest
 
 from g1_perception.core.config import Roi
 from g1_perception.core.geometry import (
+    footprint_on_plane,
+    points_above_plane,
     cube_pose_on_table,
     deproject,
     plane_basis,
@@ -236,3 +238,67 @@ def test_quad_mask_matches_roi_rectangle_of_tilted_quad():
 def test_quad_mask_rejects_bad_shape():
     with pytest.raises(ValueError, match='corners'):
         quad_mask(np.zeros((2, 2)), (10, 10))
+
+
+def test_points_above_plane_and_footprint():
+    plane = (np.array([0.0, 0.0, 1.0]), 0.0)
+    pts = np.array([
+        [0.0, 0.0, 0.03], [0.05, 0.0, 0.05], [0.05, 0.05, 0.05],
+        [0.0, 0.05, 0.05], [0.2, 0.0, 0.0], [0.0, 0.0, 0.2],
+    ])
+    kept, ratio = points_above_plane(pts, plane, 0.01, 0.075)
+    assert kept.shape == (4, 3)
+    assert np.isclose(ratio, 4 / 6)
+    short, long = footprint_on_plane(kept, plane)
+    assert np.isclose(short, 0.05, atol=1e-6)
+    assert np.isclose(long, 0.05, atol=1e-6)
+
+
+def test_geometric_rejects_flat_tape():
+    K = _make_K()
+    frame, det, roi, *_ = render_table_and_cube(K=K, yaw_deg=10.0)
+    # Same mask, but lying flat on the table (tape).
+    depth = np.full_like(frame.depth_m, 1.0)
+    tape = Frame(rgb=frame.rgb, depth_m=depth, K=K, stamp=0.0)
+    est = GeometricPoseEstimator(rois=[roi], size=0.05, margin=15)
+
+    assert est.estimate(frame, det) is not None
+    assert est.estimate(tape, det) is None
+    off = GeometricPoseEstimator(
+        rois=[roi], size=0.05, margin=15, min_height=0.0, footprint_min=0.0,
+    )
+    assert off.estimate(tape, det) is not None
+
+
+def test_geometric_ignores_mask_bleed_onto_table():
+    K = _make_K()
+    frame, det, roi, _n, _yaw, center_true = render_table_and_cube(
+        K=K, yaw_deg=0.0, center_xy=(0.0, 0.0)
+    )
+    # Mask spills 3 cm onto the table on one side (12 px at 1 m, fx 500).
+    ys, xs = np.nonzero(det.mask)
+    bled = det.mask.copy()
+    bled[ys.min():ys.max() + 1, xs.max() + 1:xs.max() + 13] = True
+    det_bled = Detection(slot=0, label=det.label, score=det.score, mask=bled)
+    roi_wide = Roi(slot=0, x0=roi.x0, y0=roi.y0, x1=roi.x1 + 15, y1=roi.y1)
+    est = GeometricPoseEstimator(rois=[roi_wide], size=0.05, margin=15)
+    raw = GeometricPoseEstimator(
+        rois=[roi_wide], size=0.05, margin=15, min_height=0.0,
+        footprint_max=0.0,
+    )
+
+    pose = est.estimate(frame, det_bled)
+    assert pose is not None
+    assert np.linalg.norm(pose.position - center_true) < 0.005
+    raw_pose = raw.estimate(frame, det_bled)
+    assert raw_pose is not None
+    assert np.linalg.norm(raw_pose.position - center_true) > 0.01
+
+
+def test_geometric_rejects_oversized_footprint():
+    K = _make_K()
+    frame, det, roi, *_ = render_table_and_cube(K=K, size=0.10, yaw_deg=0.0)
+    est = GeometricPoseEstimator(
+        rois=[roi], size=0.10, margin=15, footprint_max=0.08,
+    )
+    assert est.estimate(frame, det) is None
