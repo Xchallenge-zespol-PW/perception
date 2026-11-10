@@ -83,6 +83,7 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 │   └── test/
 ├── tools/
 │   ├── record_cubes.sh
+│   ├── record_balls.sh            # piłki (etap 2) → labels_pilki.csv
 │   ├── labels_csv.py
 │   ├── extract_frames.py
 │   ├── apriltag_from_bag.py
@@ -302,7 +303,7 @@ Tagi: druk matowy, płasko, z białą ramką wokół; zmierz bok czarnego kwadra
 ## Typowy workflow offline
 
 ```text
-1. Nagraj bag                 ./tools/record_cubes.sh ...
+1. Nagraj bag                 ./tools/record_cubes.sh ...   (piłki: record_balls.sh)
 2. Wyciągnij klatki           python3 tools/extract_frames.py
 3. Zaznacz ROI                python3 tools/roi_picker.py <png>
 4. Ustaw HSV                  python3 tools/hsv_tuner.py
@@ -341,6 +342,29 @@ Wymaga działającej kamery RealSense.
 
 Zapis: `/bags/kostki_.../` + wiersz w `/bags/labels.csv` (przy pierwszym uruchomieniu dopisze kolumnę `yaw_deg`).
 
+### `record_balls.sh` — nagrywanie baga z piłkami (etap 2)
+
+Wymaga działającej kamery RealSense. Te same topiki co `record_cubes.sh`.
+
+```bash
+./tools/record_balls.sh <liczba_pilek> <polka> <swiatlo> [czas_s] [uwagi]
+```
+
+| Argument | Opis |
+|----------|------|
+| `liczba_pilek` | `0`–`4` |
+| `polka` | `h60`, `h100`, `h60_100` (obie półki) albo `stol` |
+| `swiatlo` | np. `dzienne`, `lampa` (litery, cyfry, `_`) |
+| `czas_s` | sekundy (domyślnie `10`) |
+| `uwagi` | tekst |
+
+```bash
+./tools/record_balls.sh 4 h60 lampa
+./tools/record_balls.sh 2 h60_100 dzienne 15 "jedna przy krawedzi"
+```
+
+Zapis: `/bags/pilki_<liczba>_<polka>_<swiatlo>_<data>/` + wiersz w `/bags/labels_pilki.csv` (`bag, liczba_pilek, polka, swiatlo, czas_s, uwagi`). Błędny argument = koniec bez nagrania i bez etykiety. Klatki: `python3 tools/extract_frames.py --labels /bags/labels_pilki.csv --out-dir data_pilki` (`index.csv` dostaje dodatkowo `liczba_pilek`, `polka`).
+
 ### `labels_csv.py` — helper CSV
 
 ```bash
@@ -348,6 +372,9 @@ python3 tools/labels_csv.py ensure /bags/labels.csv
 python3 tools/labels_csv.py append /bags/labels.csv \
   --bag NAME --ulozenie RGGR --swiatlo dzienne --czas-s 15 \
   --uwagi "" --yaw-deg "0,15,45,30"
+python3 tools/labels_csv.py ensure-balls /bags/labels_pilki.csv
+python3 tools/labels_csv.py append-balls /bags/labels_pilki.csv \
+  --bag NAME --liczba-pilek 3 --polka h60 --swiatlo lampa --czas-s 10 --uwagi=""
 ```
 
 ### `extract_frames.py` — klatki z MCAP
@@ -366,8 +393,8 @@ python3 tools/extract_frames.py --every 5
 | `--out-dir` | `data` | wyjście |
 
 ```text
-data/frames/<bag>/<nr>_color.png
-data/frames/<bag>/<nr>_depth.npy      # float32 [m], 0 = brak
+data/frames/<bag>/<bag>_<nr>_color.png
+data/frames/<bag>/<bag>_<nr>_depth.npy  # float32 [m], 0 = brak
 data/frames/<bag>/camera_info.json
 data/index.csv                        # + ulozenie, swiatlo, yaw_deg
 ```
@@ -395,7 +422,7 @@ Kolumny: `bag, stamp_s, tag_id, frame, x, y, z, qx, qy, qz, qw, distance_m, repr
 ### `roi_picker.py` — miejsca kostek
 
 ```bash
-python3 tools/roi_picker.py data/frames/<bag>/0_color.png
+python3 tools/roi_picker.py data/frames/<bag>/<bag>_0_color.png
 ```
 
 Kolejność zaznaczeń = `slot` 0,1,2,… → `src/g1_perception/config/rois.yaml`.

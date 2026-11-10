@@ -22,7 +22,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         'image',
         type=Path,
-        help='Color PNG path (e.g. data/frames/<bag>/0_color.png)',
+        help='Color PNG path (e.g. data/frames/<bag>/<bag>_0_color.png)',
     )
     parser.add_argument(
         '--output',

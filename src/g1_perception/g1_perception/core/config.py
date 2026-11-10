@@ -92,7 +92,7 @@ def load_rois(path: Path | None = None) -> list[Roi]:
     if not cfg_path.is_file():
         raise FileNotFoundError(
             f'Missing {cfg_path}. Create it with:\n'
-            f'  python3 tools/roi_picker.py data/frames/<bag>/0_color.png'
+            f'  python3 tools/roi_picker.py data/frames/<bag>/<bag>_0_color.png'
         )
     with cfg_path.open(encoding='utf-8') as f:
         data = yaml.safe_load(f) or {}
