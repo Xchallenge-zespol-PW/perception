@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Extract synchronized RGB-D frames from MCAP bags listed in labels.csv."""
+"""
+Extract synchronized RGB-D frames from MCAP bags listed in labels.csv.
+
+Works for cube bags (``/bags/labels.csv``) and ball bags
+(``--labels /bags/labels_pilki.csv``). Frame files are named
+``<bag>_<frame>_color.png`` / ``<bag>_<frame>_depth.npy`` so a flat upload
+(e.g. Roboflow) can still be split by recording.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +29,18 @@ DEFAULT_LABELS = DEFAULT_BAGS_DIR / 'labels.csv'
 DEFAULT_OUT = Path('data')
 MAX_DT_NS_DEFAULT = 20_000_000  # 20 ms
 
+INDEX_FIELDNAMES = [
+    'bag',
+    'frame',
+    'color_path',
+    'depth_path',
+    'ulozenie',
+    'swiatlo',
+    'yaw_deg',
+]
+# labels_pilki.csv columns copied to index.csv when present in the labels file
+BALL_INDEX_FIELDNAMES = ['liczba_pilek', 'polka']
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -40,7 +59,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         '--labels',
         type=Path,
         default=DEFAULT_LABELS,
-        help='CSV with columns bag,ulozenie,swiatlo,... (default: /bags/labels.csv)',
+        help=(
+            'CSV with columns bag,swiatlo,... (default: /bags/labels.csv; '
+            'balls: /bags/labels_pilki.csv)'
+        ),
     )
     parser.add_argument(
         '--out-dir',
@@ -129,6 +151,11 @@ def read_bag(
     return colors, depths, camera_info
 
 
+def frame_stem(bag_name: str, frame_idx: int) -> str:
+    """File name stem for one extracted frame, prefixed with the bag name."""
+    return f'{bag_name}_{frame_idx}'
+
+
 def extract_bag(
     bag_name: str,
     bags_dir: Path,
@@ -138,6 +165,7 @@ def extract_bag(
     ulozenie: str,
     swiatlo: str,
     yaw_deg: str = '',
+    extra: dict[str, str] | None = None,
 ) -> list[dict[str, str | int]]:
     """Extract frames for one bag; return index rows (may be empty)."""
     bag_dir = bags_dir / bag_name
@@ -173,8 +201,9 @@ def extract_bag(
         if depth_m is None:
             continue
 
-        color_rel = out_dir / 'frames' / bag_name / f'{frame_idx}_color.png'
-        depth_rel = out_dir / 'frames' / bag_name / f'{frame_idx}_depth.npy'
+        stem = frame_stem(bag_name, frame_idx)
+        color_rel = out_dir / 'frames' / bag_name / f'{stem}_color.png'
+        depth_rel = out_dir / 'frames' / bag_name / f'{stem}_depth.npy'
 
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         cv2.imwrite(str(color_rel), bgr)
@@ -189,6 +218,7 @@ def extract_bag(
                 'ulozenie': ulozenie,
                 'swiatlo': swiatlo,
                 'yaw_deg': yaw_deg,
+                **(extra or {}),
             }
         )
 
@@ -210,7 +240,10 @@ def main(argv: list[str] | None = None) -> int:
     (out_dir / 'frames').mkdir(parents=True, exist_ok=True)
 
     with args.labels.open(newline='', encoding='utf-8') as f:
-        labels = list(csv.DictReader(f))
+        reader = csv.DictReader(f)
+        labels = list(reader)
+        label_columns = reader.fieldnames or []
+    extra_fields = [c for c in BALL_INDEX_FIELDNAMES if c in label_columns]
 
     all_rows: list[dict[str, str | int]] = []
     for row in labels:
@@ -225,19 +258,12 @@ def main(argv: list[str] | None = None) -> int:
                 ulozenie=row.get('ulozenie', ''),
                 swiatlo=row.get('swiatlo', ''),
                 yaw_deg=row.get('yaw_deg', '') or '',
+                extra={c: row.get(c, '') or '' for c in extra_fields},
             )
         )
 
     index_path = out_dir / 'index.csv'
-    fieldnames = [
-        'bag',
-        'frame',
-        'color_path',
-        'depth_path',
-        'ulozenie',
-        'swiatlo',
-        'yaw_deg',
-    ]
+    fieldnames = INDEX_FIELDNAMES + extra_fields
     with index_path.open('w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
