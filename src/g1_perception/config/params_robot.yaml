@@ -47,8 +47,8 @@ perception_node:
     z_max_m: 2.0
     min_height_m: 0.01                # tape is flat: points must stand above the table
     min_above_ratio: 0.5
-    footprint_min_m: 0.02
-    footprint_max_m: 0.13             # real cubes ~5.4 x 7.1 cm (depth edges), p99 11 cm
+    footprint_min_m: 0.0
+    footprint_max_m: 0.0             # real cubes ~5.4 x 7.1 cm (depth edges), p99 11 cm
     # pose_estimator: pnp (YOLO-pose corners; see docs/pose_pnp.md)
     kpt_min_conf: 0.5             # min confidence of every corner
     pnp_max_reproj_px: 2.0        # max PnP reprojection error
