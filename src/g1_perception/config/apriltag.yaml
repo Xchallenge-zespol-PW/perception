@@ -1,0 +1,16 @@
+# AprilTag node (ros2 launch g1_perception apriltag.launch.py).
+apriltag_node:
+  ros__parameters:
+    image_topic: /camera/camera/color/image_raw
+    camera_info_topic: /camera/camera/color/camera_info
+    output_topic: /apriltag/detections
+    debug_image_topic: /apriltag/debug_image   # drawn only while subscribed
+    family: "36h11"
+    tag_size_m: 0.10              # side of the BLACK square, not the white border
+    tag_ids: ""                   # keep only these, e.g. "0,1,2"; "" = all
+    max_reproj_px: 2.0            # worse corner fit = no pose (tag still logged)
+    target_frame: ""              # /apriltag/detections in this frame (e.g. pelvis); "" = camera
+    tf_prefix: "tag_"             # TF tag_<id> under the camera optical frame
+    publish_tf: true
+    tf_timeout_s: 0.05
+    stats_period_s: 10.0

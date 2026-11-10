@@ -54,6 +54,7 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 ├── src/g1_perception/             # pakiet ament_python
 │   ├── config/                    # rois, labels, params_{laptop,robot}.yaml
 │   ├── launch/perception.launch.py  # config:=params_laptop.yaml (domyślnie)
+│   ├── launch/apriltag.launch.py    # config:=apriltag.yaml
 ├── deploy/                        # requirements-robot.txt, constraints.txt (numpy<2)
 ├── docs/robot.md                  # Jetson Orin NX / Humble / TensorRT GPU + ONNX CPU
 │   ├── g1_perception/
@@ -65,10 +66,13 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 │   │   │   ├── voting.py
 │   │   │   ├── frame_utils.py
 │   │   │   ├── debug_vis.py
-│   │   │   └── geometry.py
+│   │   │   ├── geometry.py
+│   │   │   ├── apriltag.py        # AprilTag: aruco + IPPE
+│   │   │   └── tf_chain.py        # TF z /tf w bagu (offline)
 │   │   ├── node_config.py
 │   │   ├── ros_conversions.py
 │   │   ├── perception_node.py     # entry point: perception_node
+│   │   ├── apriltag_node.py       # entry point: apriltag_node
 │   │   ├── segmenters/
 │   │   │   ├── hsv.py             # @register("hsv")
 │   │   │   └── yolo_seg.py        # @register("yolo_seg")
@@ -81,6 +85,7 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 │   ├── record_cubes.sh
 │   ├── labels_csv.py
 │   ├── extract_frames.py
+│   ├── apriltag_from_bag.py
 │   ├── roi_picker.py
 │   ├── hsv_tuner.py
 │   ├── autolabel.py               # Grounded SAM → YOLO-seg dataset
@@ -265,6 +270,35 @@ Wymagania: kamera podpięta do drzewa TF robota (`pelvis` → ramka optyczna kam
 
 ---
 
+## Węzeł AprilTag (`apriltag_node`)
+
+Osobny węzeł, niezależny od kostek: wykrywa AprilTagi w obrazie kolorowym (OpenCV aruco, rodziny `16h5` / `25h9` / `36h10` / `36h11`; działa na OpenCV 4.5 contrib i ≥ 4.7) i liczy pozę każdego tagu z jego 4 rogów (`solvePnP` IPPE, bez głębi). Wykrywanie ~1–2 ms na klatkę 640×480 (laptop).
+
+```bash
+ros2 launch g1_perception apriltag.launch.py                       # config/apriltag.yaml
+ros2 launch g1_perception apriltag.launch.py tag_size_m:=0.162 target_frame:=pelvis
+```
+
+| Wyjście | Co |
+|---------|----|
+| TF `tag_<id>` | pod ramką optyczną kamery, stempel obrazu. Środek tagu, x w prawo, y w górę, z z nadrukowanej strony (dla tagu na podłodze: w górę) |
+| `/apriltag/detections` (`vision_msgs/Detection3DArray`) | `id` = numer tagu, `class_id` = `tag36h11`, `score` = 1 / (1 + błąd reprojekcji px), poza w `target_frame` (gdy jego TF jest znany, inaczej w ramce kamery), `bbox.size` = bok tagu |
+| `/apriltag/debug_image` | obrysy, numery i osie (x czerwona, y zielona, z niebieska); rysowany tylko przy subskrybencie |
+| log co `stats_period_s` | `frames`, `with_tags`, `ids`, `detect_ms_avg` |
+
+Parametry (`config/apriltag.yaml`): `family`, `tag_size_m` (bok **czarnego** kwadratu, nie białej ramki), `tag_ids` (`"0,1,2"`, `""` = wszystkie), `max_reproj_px` (gorsze dopasowanie rogów = brak pozy), `target_frame`, `tf_prefix`, `publish_tf`, `image_topic`, `camera_info_topic`.
+
+Nagranie do późniejszej analizy (`tools/apriltag_from_bag.py`) musi mieć TF, inaczej nie da się przeliczyć tagów do ramek robota:
+
+```bash
+ros2 bag record -s mcap -o tagi_$(date +%Y%m%d_%H%M%S) \
+  /camera/camera/color/image_raw /camera/camera/color/camera_info /tf /tf_static
+```
+
+Tagi: druk matowy, płasko, z białą ramką wokół; zmierz bok czarnego kwadratu; każdy tag inne id. Przy chodzeniu rozmycie ruchu psuje rogi: lepsze światło / krótsza ekspozycja kamery.
+
+---
+
 ## Typowy workflow offline
 
 ```text
@@ -337,6 +371,26 @@ data/frames/<bag>/<nr>_depth.npy      # float32 [m], 0 = brak
 data/frames/<bag>/camera_info.json
 data/index.csv                        # + ulozenie, swiatlo, yaw_deg
 ```
+
+### `apriltag_from_bag.py` — pozy AprilTagów z bagów
+
+Biblioteka **rosbags** (bez `rclpy`; bagi MCAP i sqlite3). Dla każdej klatki (co `--every`) i każdego tagu z pozą zapisuje wiersz w ramce kamery oraz po jednym w każdej ramce z `--frames`, przeliczonej z `/tf` + `/tf_static` z baga (najbliższa próbka TF na każdej krawędzi, bez interpolacji, maks. `--max-tf-dt-ms`).
+
+```bash
+python3 tools/apriltag_from_bag.py /bags/tagi_* --tag-size 0.162 --frames pelvis,left_ankle_roll_link
+```
+
+| Flaga | Domyślnie | Opis |
+|-------|-----------|------|
+| `--tag-size` | `0.10` | bok czarnego kwadratu [m] |
+| `--family` / `--ids` | `36h11` / wszystkie | rodzina, filtr numerów (`0,1,2`) |
+| `--frames` | — | dodatkowe ramki TF |
+| `--every` | `1` | co którą klatkę |
+| `--max-reproj-px` | `2.0` | jak w węźle |
+| `--max-tf-dt-ms` | `50` | max odległość próbki TF od stempla obrazu |
+| `--out` | `data/apriltags.csv` | wyjście |
+
+Kolumny: `bag, stamp_s, tag_id, frame, x, y, z, qx, qy, qz, qw, distance_m, reproj_px, ambiguity` (`ambiguity` blisko 1 = tag mógłby być pochylony w drugą stronę, poza niepewna; mały / daleki tag).
 
 ### `roi_picker.py` — miejsca kostek
 
