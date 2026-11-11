@@ -90,6 +90,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.0,
         help='Hue augmentation (default: 0.0 — colour is the class)',
     )
+    parser.add_argument('--hsv-s', type=float, default=0.7, help='Saturation gain (default: 0.7)')
+    parser.add_argument('--hsv-v', type=float, default=0.4, help='Value gain (default: 0.4)')
+    parser.add_argument('--degrees', type=float, default=0.0, help='Rotation degrees (default: 0)')
+    parser.add_argument('--translate', type=float, default=0.1, help='Translation fraction (default: 0.1)')
+    parser.add_argument('--scale', type=float, default=0.5, help='Scale gain (default: 0.5)')
+    parser.add_argument('--shear', type=float, default=0.0, help='Shear degrees (default: 0)')
+    parser.add_argument('--perspective', type=float, default=0.0, help='Perspective fraction (default: 0)')
+    parser.add_argument('--flipud', type=float, default=0.0, help='Vertical flip probability (default: 0)')
+    parser.add_argument('--mosaic', type=float, default=1.0, help='Mosaic probability (default: 1)')
+    parser.add_argument('--close-mosaic', type=int, default=10, help='Epochs without mosaic at the end (default: 10)')
+    parser.add_argument('--mixup', type=float, default=0.0, help='Mixup probability (default: 0)')
+    parser.add_argument('--copy-paste', type=float, default=0.0, help='Copy-paste probability (default: 0)')
     parser.add_argument('--exist-ok', action='store_true', help='Reuse the run dir')
     args = parser.parse_args(argv)
 
@@ -194,7 +206,19 @@ def main(argv: list[str] | None = None) -> int:
         'seed': args.seed,
         'exist_ok': args.exist_ok,
         'fliplr': args.fliplr,
+        'flipud': args.flipud,
         'hsv_h': args.hsv_h,
+        'hsv_s': args.hsv_s,
+        'hsv_v': args.hsv_v,
+        'degrees': args.degrees,
+        'translate': args.translate,
+        'scale': args.scale,
+        'shear': args.shear,
+        'perspective': args.perspective,
+        'mosaic': args.mosaic,
+        'close_mosaic': args.close_mosaic,
+        'mixup': args.mixup,
+        'copy_paste': args.copy_paste,
     }
     if args.device != '':
         train_kwargs['device'] = args.device
