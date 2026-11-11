@@ -19,9 +19,11 @@ class NamedCube:
 
     ``name`` is ``<prefix><place>``, ``label`` the colour seen at the start,
     ``start_pose`` the voted pose at the start. ``pose`` is the pose seen in
-    the last update, or None when the cube was not seen in it. ``track_id``
-    is the track the name is bound to. All poses are in the frame of the
-    tracked cubes passed to :meth:`CubeRegistry.update`.
+    the last update, or None when the cube was not seen in it.
+    ``last_pose`` is the pose it was last seen at (the start pose until it
+    is seen again), also while it is out of view. ``track_id`` is the track
+    the name is bound to. All poses are in the frame of the tracked cubes
+    passed to :meth:`CubeRegistry.update`.
     """
 
     name: str
@@ -29,6 +31,7 @@ class NamedCube:
     start_pose: Pose
     pose: Pose | None
     track_id: int | None
+    last_pose: Pose | None = None
 
 
 @dataclass
@@ -37,6 +40,13 @@ class _Binding:
     label: str
     start_pose: Pose
     track_id: int | None
+    last_pose: Pose
+
+    def named(self, pose: Pose | None) -> NamedCube:
+        return NamedCube(
+            self.name, self.label, self.start_pose, pose, self.track_id,
+            self.last_pose,
+        )
 
 
 class CubeRegistry:
@@ -57,7 +67,9 @@ class CubeRegistry:
     ``reid_gate_m`` of the start one. Cubes are pushed across that line, so
     the coordinate barely changes, while neighbours are a cube size away.
     Colour only vetoes a match once the track has voted it, because a new
-    track is ``uncertain`` until it has enough votes.
+    track is ``uncertain`` until it has enough votes. Every name keeps the
+    pose it was last seen at (:meth:`known`), so a cube out of view (the
+    camera turned away with the torso) still has a position.
 
     A stamp older than the previous one (bag played with ``--loop``) makes
     :class:`CubeTracker` restart its track ids, so every name then forgets
@@ -101,6 +113,15 @@ class CubeRegistry:
         """Return the number of start layouts frozen so far (0 = none yet)."""
         return self._start_id
 
+    def known(self) -> list[NamedCube]:
+        """
+        Return the cubes of the frozen layout at their last seen poses.
+
+        ``pose`` is None (nothing new seen), ``last_pose`` is set for every
+        cube. Empty before the layout is frozen.
+        """
+        return [b.named(None) for b in self._bindings]
+
     def reset(self) -> None:
         """Forget the frozen layout and wait for a new one (keeps start_id)."""
         self._bindings = []
@@ -129,10 +150,7 @@ class CubeRegistry:
         if not self._bindings:
             if not self._try_latch(assignment, stamp):
                 return []
-            return [
-                NamedCube(b.name, b.label, b.start_pose, b.start_pose, b.track_id)
-                for b in self._bindings
-            ]
+            return [b.named(b.start_pose) for b in self._bindings]
         return self._follow(tracked)
 
     def _try_latch(self, assignment: AssignmentResult, stamp: float) -> bool:
@@ -158,6 +176,7 @@ class CubeRegistry:
                 label=s.label,
                 start_pose=s.pose,  # type: ignore[arg-type]
                 track_id=s.track_id,
+                last_pose=s.pose,  # type: ignore[arg-type]
             )
             for s in slots
         ]
@@ -202,16 +221,13 @@ class CubeRegistry:
             binding.track_id = free[t_index].track_id
             seen[binding.name] = free[t_index]
 
-        return [
-            NamedCube(
-                name=b.name,
-                label=b.label,
-                start_pose=b.start_pose,
-                pose=seen[b.name].pose if b.name in seen else None,
-                track_id=b.track_id,
-            )
-            for b in self._bindings
-        ]
+        cubes = []
+        for binding in self._bindings:
+            pose = seen[binding.name].pose if binding.name in seen else None
+            if pose is not None:
+                binding.last_pose = pose
+            cubes.append(binding.named(pose))
+        return cubes
 
 
 def _contradicts(track: TrackedCube, label: str) -> bool:

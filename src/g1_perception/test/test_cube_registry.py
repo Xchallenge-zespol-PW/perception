@@ -198,6 +198,34 @@ def test_cube_not_seen_in_a_frame_has_no_pose():
     assert cubes['cube_1'].pose is not None
 
 
+def test_cube_out_of_view_keeps_the_pose_it_was_last_seen_at():
+    camera = _latched()
+    tracked = _start_tracks()
+    tracked[0] = _cube(10, START_X[0], y=0.12, label=LABEL_UNCERTAIN)
+    camera.frame(tracked)
+    camera.frame(_start_tracks()[1:])  # camera turned away from cube_1
+
+    known = _by_name(camera.registry.known())
+
+    assert len(known) == 4
+    assert all(c.pose is None for c in known.values())
+    assert float(known['cube_1'].last_pose.position[1]) == pytest.approx(0.12)
+    # Never seen after the freeze: still at the start pose.
+    assert float(known['cube_4'].last_pose.position[0]) == pytest.approx(
+        START_X[3]
+    )
+
+
+def test_known_is_empty_before_the_freeze_and_after_reset():
+    camera = _Camera(CubeRegistry(axis='x', latch_s=2 * DT))
+    camera.frame(_start_tracks())
+    assert camera.registry.known() == []
+
+    camera = _latched()
+    camera.registry.reset()
+    assert camera.registry.known() == []
+
+
 def test_lost_cube_is_found_again_along_its_line():
     camera = _latched()
     others = _start_tracks()[1:]
