@@ -106,10 +106,8 @@ class _PublishBundle:
     """
     Last finished inference result ready for publishers.
 
-    ``seq`` numbers the processed frames, so a bundle published twice by the
-    timer sends its TF only once. ``cubes`` are the named cubes of this frame
-    in ``frame_id`` (empty before the start layout is frozen), ``start`` the
-    frozen start layout.
+    ``cubes`` are the named cubes of this frame in ``frame_id`` (empty
+    before the start layout is frozen), ``start`` the frozen start layout.
     """
 
     camera_header: Header
@@ -118,7 +116,6 @@ class _PublishBundle:
     rgb: np.ndarray
     inference_ms: float
     frame_id: str
-    seq: int
     cubes: list[NamedCube]
     start: _StartLayout | None
 
@@ -187,11 +184,12 @@ class PerceptionNode(Node):
         self._state_lock = threading.Lock()
         self._start: _StartLayout | None = None
         self._track_ids: dict[str, int | None] = {}
-        self._seq = 0
+        # Frame of the registry's poses (target_frame), None before a layout.
+        self._cube_frame: str | None = None
 
         # Used only by the publish timer.
-        self._published_seq = 0
         self._published_start_id = 0
+        self._last_cube_tf_ns = -1
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -395,7 +393,6 @@ class PerceptionNode(Node):
             voted, frame_id = self._voted_to_target(voted_cam, camera_header)
             debug_results = results
 
-        self._seq += 1
         with self._result_lock:
             self._result = _PublishBundle(
                 camera_header=camera_header,
@@ -404,7 +401,6 @@ class PerceptionNode(Node):
                 rgb=frame.rgb,
                 inference_ms=inference_ms,
                 frame_id=frame_id,
-                seq=self._seq,
                 cubes=cubes,
                 start=start,
             )
@@ -448,7 +444,7 @@ class PerceptionNode(Node):
             self._pub_debug.publish(debug_msg)
 
     def _publish_task_outputs(self, bundle: _PublishBundle) -> None:
-        """Publish a new start layout once, and the cubes seen in a new frame."""
+        """Publish a new start layout once, and the TF of every named cube."""
         start = bundle.start
         if start is not None and start.start_id != self._published_start_id:
             # Start frames before the colours: the logic node starts the task
@@ -463,19 +459,34 @@ class PerceptionNode(Node):
             self._pub_colors.publish(cube_colors_msg(start.cubes))
             self._published_start_id = start.start_id
 
-        if bundle.seq == self._published_seq:
+        self._publish_known_cubes()
+
+    def _publish_known_cubes(self) -> None:
+        """
+        Publish TF <cube> for every cube of the layout, also out of view.
+
+        A cube keeps the pose it was last seen at, so it does not vanish
+        while the camera looks away (torso turned). Stamped with the current
+        time on every tick: a TF that stops being updated looks lost.
+        """
+        with self._state_lock:
+            if self._registry is None:
+                return
+            cubes = self._registry.known()
+            frame_id = self._cube_frame
+        if not cubes or not frame_id:
             return
-        self._published_seq = bundle.seq
-        header = Header(
-            stamp=bundle.camera_header.stamp, frame_id=bundle.frame_id
-        )
-        transforms = [
-            pose_to_transform(cube.pose, header, cube.name)
-            for cube in bundle.cubes
-            if cube.pose is not None
-        ]
-        if transforms:
-            self._tf_broadcaster.sendTransform(transforms)
+        now = self.get_clock().now()
+        # A paused simulation clock would repeat the stamp (TF_REPEATED_DATA).
+        if now.nanoseconds <= self._last_cube_tf_ns:
+            return
+        self._last_cube_tf_ns = now.nanoseconds
+        header = Header(stamp=now.to_msg(), frame_id=frame_id)
+        self._tf_broadcaster.sendTransform([
+            pose_to_transform(cube.last_pose, header, cube.name)
+            for cube in cubes
+            if cube.last_pose is not None
+        ])
 
     def _on_reset(
         self,
@@ -491,6 +502,7 @@ class PerceptionNode(Node):
             self._voter.reset()
             self._start = None
             self._track_ids = {}
+            self._cube_frame = None
         with self._result_lock:
             self._result = None
 
@@ -515,6 +527,7 @@ class PerceptionNode(Node):
         cubes = self._registry.update(assignment, tracked, stamp)
         if not cubes:
             return cubes
+        self._cube_frame = frame_id
 
         if self._start is None or self._start.start_id != self._registry.start_id:
             self._start = self._anchor_start(cubes, camera_header, frame_id)
