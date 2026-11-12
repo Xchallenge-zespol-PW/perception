@@ -27,9 +27,9 @@ perception_node:
     # engine), the node falls back to ONNX on CPU and logs a warning.
     segmenter: yolo_seg
     pose_estimator: geometric
-    model_path: /ws/models/cubes_seg_v4.engine
+    model_path: /ws/models/cubes_seg_v4_aug.engine
     device: "0"
-    fallback_model_path: /ws/models/cubes_seg_v4.onnx
+    fallback_model_path: /ws/models/cubes_seg_v4_aug.onnx
     fallback_device: cpu
     warmup_runs: 2
     conf: 0.35                    # 0.25 let low-score duplicates through (5th track)
