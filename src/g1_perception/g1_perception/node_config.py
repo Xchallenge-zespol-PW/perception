@@ -68,6 +68,11 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'start_frame': '',
     'latch_s': 1.0,
     'reid_gate_m': 0.025,
+    'reid_near_m': 0.03,
+    'reid_max_dz_m': 0.04,
+    'reid_hold_s': 0.5,
+    'reid_min_frames': 3,
+    'reid_require_color': True,
     'publish_rate_hz': 5.0,
     'sync_queue_size': 10,
     'sync_slop_s': 0.05,
@@ -183,6 +188,11 @@ def registry_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
         'name_prefix': str(params['cube_name_prefix']),
         'latch_s': float(params['latch_s']),
         'reid_gate_m': float(params['reid_gate_m']),
+        'reid_near_m': float(params['reid_near_m']),
+        'reid_max_dz_m': float(params['reid_max_dz_m']),
+        'reid_hold_s': float(params['reid_hold_s']),
+        'reid_min_frames': int(params['reid_min_frames']),
+        'reid_require_color': bool(params['reid_require_color']),
     }
 
 

@@ -154,6 +154,11 @@ def test_registry_kwargs_use_the_slot_axis():
         'name_prefix': 'cube_',
         'latch_s': 0.5,
         'reid_gate_m': 0.025,
+        'reid_near_m': 0.03,
+        'reid_max_dz_m': 0.04,
+        'reid_hold_s': 0.5,
+        'reid_min_frames': 3,
+        'reid_require_color': True,
     }
     CubeRegistry(**kwargs)
 
