@@ -243,6 +243,31 @@ def test_lost_cube_is_found_again_along_its_line():
     assert cube_1.label == LABEL_RED
 
 
+@pytest.mark.parametrize('yaw_deg', [-8.0, 5.0, 8.0])
+def test_lost_cube_is_found_again_along_a_turned_line(yaw_deg):
+    # The robot stands turned to the table: the line of the cubes is off x and
+    # the push across it moves the cube 4 cm along x at 8 deg.
+    yaw = np.radians(yaw_deg)
+    line = np.array([np.cos(yaw), np.sin(yaw)])
+    across = np.array([-np.sin(yaw), np.cos(yaw)])
+    places = [np.array([START_X[0], 0.0]) + line * 0.06 * i for i in range(4)]
+    start = [
+        _cube(10 + i, p[0], y=p[1], label=label)
+        for i, (p, label) in enumerate(zip(places, COLORS))
+    ]
+    camera = _Camera(CubeRegistry(axis='x', latch_s=2 * DT))
+    for _ in range(3):
+        camera.frame(start)
+    others = start[1:]
+    camera.frame(others)
+
+    end = places[0] + across * 0.3
+    pushed = _cube(42, end[0], y=end[1], label=COLORS[0])
+    cube_1 = _by_name(camera.frame(others + [pushed]))['cube_1']
+
+    assert cube_1.track_id == 42
+
+
 def test_new_track_takes_over_from_an_unseen_live_track():
     camera = _latched()
     tracked = _start_tracks()

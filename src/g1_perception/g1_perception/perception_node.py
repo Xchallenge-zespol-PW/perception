@@ -85,6 +85,7 @@ from g1_perception.ros_conversions import (  # noqa: E402
 # The logic node of exercise 1 reads the start pose of cube <name> from the
 # static TF frame <name>_start.
 START_FRAME_SUFFIX = '_start'
+SEEN_FRAME_SUFFIX = '_seen'
 
 
 @dataclass(frozen=True)
@@ -138,9 +139,11 @@ class PerceptionNode(Node):
     :class:`CubeRegistry` and published once: the static TF
     ``<name>_start`` in ``start_frame`` and ``xchallenge_msgs/CubeColors``
     (transient local). The cubes keep their names while they are pushed, and
-    each cube seen in a frame is published as the TF ``<name>`` in
-    ``target_frame``. ``~/reset`` (std_srvs/Trigger) forgets the layout
-    before the next attempt.
+    every cube of the layout is published as the TF ``<name>`` in
+    ``target_frame`` (stamped now, at its last seen pose), each cube seen in
+    a frame also as ``<name>_seen`` with the stamp of that frame, so its age
+    tells how fresh the pose is. ``~/reset`` (std_srvs/Trigger) forgets the
+    layout before the next attempt.
 
     Pose gates: a cut-off or hidden cube (``pose_border_px``,
     ``min_visible_ratio``), or every cube of a frame taken while the camera
@@ -207,6 +210,7 @@ class PerceptionNode(Node):
         # Used only by the publish timer.
         self._published_start_id = 0
         self._last_cube_tf_ns = -1
+        self._last_seen_tf_ns = -1
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -488,6 +492,27 @@ class PerceptionNode(Node):
             self._published_start_id = start.start_id
 
         self._publish_known_cubes()
+        self._publish_seen_cubes(bundle)
+
+    def _publish_seen_cubes(self, bundle: _PublishBundle) -> None:
+        """
+        Publish TF <cube>_seen for the cubes seen in the frame of ``bundle``.
+
+        Stamped with that frame, once per frame: a cube out of view or under
+        the hand gets no new one, so a reader sees how old its pose is.
+        """
+        stamp = Time.from_msg(bundle.camera_header.stamp).nanoseconds
+        seen = [c for c in bundle.cubes if c.pose is not None]
+        if not seen or not bundle.frame_id or stamp <= self._last_seen_tf_ns:
+            return
+        self._last_seen_tf_ns = stamp
+        header = Header(
+            stamp=bundle.camera_header.stamp, frame_id=bundle.frame_id
+        )
+        self._tf_broadcaster.sendTransform([
+            pose_to_transform(c.pose, header, c.name + SEEN_FRAME_SUFFIX)
+            for c in seen
+        ])
 
     def _publish_known_cubes(self) -> None:
         """
