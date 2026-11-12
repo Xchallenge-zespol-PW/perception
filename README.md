@@ -318,7 +318,7 @@ Tagi: druk matowy, płasko, z białą ramką wokół; zmierz bok czarnego kwadra
 
 ## Węzeł piłek (`ball_node`, etap 2)
 
-Każda piłka widoczna w bieżącej klatce jako TF, bez śledzenia i pamięci (kroki 1–2). Model ten sam co dla kostek (v4, klasa `red ball`).
+Mapa piłek w `odom` ze stałymi nazwami `ball_<N>` (krok 3) i piłki z bieżącej klatki (kroki 1–2). Model ten sam co dla kostek (v4, klasa `red ball`).
 
 ```bash
 ros2 launch g1_perception balls.launch.py                  # robot: /camera/d435, odom, TensorRT
@@ -329,10 +329,14 @@ ros2 launch g1_perception balls.launch.py camera_ns:=/camera/camera world_frame:
 
 | Wyjście | Opis |
 |---------|------|
-| TF `ball_seen_<K>` | środek piłki w `world_frame` (`odom`), stempel klatki; `K` = kolejność od najbliższej w tej klatce, **nie** stały numer. Piłka poza kadrem zostawia stary TF (wiek = stempel) |
-| `/perception/balls` (`geometry_msgs/PoseArray`) | środki piłek z klatki w tej samej kolejności |
+| TF `ball_<N>` | każda piłka mapy w `world_frame` (`odom`), co `publish_rate_hz` (5 Hz), stempel = teraz, pozycja = mediana 30 ostatnich obserwacji. Nazwa stała przez cały przejazd (numery w kolejności wejścia do mapy), także gdy piłka jest poza kadrem |
+| `/perception/balls` (`vision_msgs/Detection3DArray`) | to samo co TF `ball_<N>`: `id` = nazwa, `class_id` = `red ball`, `bbox.size` = zmierzona średnica |
+| `~/reset` (`std_srvs/Trigger`) | czyści mapę, numery od 1 (`ros2 service call /ball_node/reset std_srvs/srv/Trigger`) |
+| TF `ball_seen_<K>` | piłki z ostatniej klatki w `world_frame`, stempel klatki; `K` = kolejność od najbliższej, **nie** stały numer. Piłka poza kadrem zostawia stary TF (wiek = stempel) |
+| `/perception/balls/seen` (`geometry_msgs/PoseArray`) | środki piłek z klatki w tej samej kolejności |
 | `/perception/balls/debug_image` | maska, dopasowany okrąg, `K odległość r=promień`; czerwona = publikowana, żółta = odrzucona (powód w etykiecie); rysowany tylko przy subskrybencie |
-| log co `log_period_s` | `balls: 1: 1.73 m r=3.4 cm, 2: 0.95 m r=3.6 cm (duplicate)` (odległość od kamery) |
+| log co `log_period_s` | `balls seen: ball_1: 1.73 m r=3.4 cm, new: 2.07 m ..., 3: 0.95 m r=3.6 cm (duplicate); in map: 2` (odległość od kamery; `new` = jeszcze bez nazwy) |
+| log przy nowej piłce | `ball_3 new at (x, y, z) in odom`; ostrzeżenie, gdy nowa piłka jest bliżej niż 4 promienie od znanej (ta sama piłka przesunięta w mapie?) |
 | log co 10 s | `ball stats`: `balls_seen` (opublikowane), `rejected=hidden:N,shape:N,duplicate:N` |
 
 Pozycja (`core/ball.py`, bez parametru rozmiaru piłki):
@@ -341,6 +345,8 @@ Pozycja (`core/ball.py`, bez parametru rozmiaru piłki):
 2. **Głębia środka.** Piksel w odległości `ρ` (w promieniach okręgu) widzi powierzchnię `r·√(1−ρ²)` przed środkiem, a `r = r_px·z_c/f`. Każdy piksel wewnątrz 0,85 promienia daje więc `z_c = z / (1 − r_px·√(1−ρ²)/f)`, a brana jest mediana.
 3. **Kształt** (tylko dla piłek o promieniu w obrazie ≥ 10 px, czyli do ok. 1,2 m; dalej D435 wygładza głębię). Promień z profilu głębi musi pasować do promienia z obrysu, inaczej odrzucenie jako `shape` (płaski czerwony obiekt, zła głębia).
 4. **Duplikaty.** Dwa środki bliżej niż jeden promień to ta sama piłka (druga maska YOLO). Zostaje lepsza, druga jest odrzucona jako `duplicate`.
+
+Mapa (`core/ball_map.py`): piłki z klatki są dopasowywane jeden do jednego, od najbliższych, do piłek mapy w promieniu 2 promieni piłki (dwie różne piłki są co najmniej tyle od siebie). Niedopasowana piłka zaczyna kandydata; po 5 klatkach z obserwacją (ok. 0,3 s) dostaje następny numer, a kandydat bez obserwacji przez 1 s znika (pojedyncze fałszywe wykrycia nie dostają nazwy). Piłka z nazwą zostaje w mapie (usuwanie zabranych piłek: krok 4). Bez TF kamera → `odom` klatka nie trafia do mapy (kamera się rusza), tylko do `ball_seen_<K>` w ramce kamery.
 
 Na bagach z 2026-11-11 (co 10. klatka) liczba opublikowanych piłek zgadza się z etykietą w 257/310 klatek. Większość różnic to błędne etykiety (widać więcej piłek niż w nazwie baga). Przy stojącej kamerze środki są stabilne do ±1–7 mm do 2,9 m. Zmierzony promień: mediana 3,3 cm (p5–p95 2,8–4,2 cm, większy na dalekich piłkach, bo maska jest o ok. 1 px za duża).
 

@@ -30,6 +30,7 @@ from rclpy.qos import qos_profile_sensor_data  # noqa: E402
 from rclpy.time import Time  # noqa: E402
 from sensor_msgs.msg import CameraInfo, Image  # noqa: E402
 from std_msgs.msg import Header  # noqa: E402
+from std_srvs.srv import Trigger  # noqa: E402
 from tf2_ros import (  # noqa: E402
     Buffer,
     ConnectivityException,
@@ -38,12 +39,22 @@ from tf2_ros import (  # noqa: E402
     TransformBroadcaster,
     TransformListener,
 )
+from vision_msgs.msg import (  # noqa: E402
+    Detection3D,
+    Detection3DArray,
+    ObjectHypothesisWithPose,
+)
 
 from g1_perception.core.ball import (  # noqa: E402
     BallObservation,
     draw_balls,
     find_balls,
     format_balls,
+)
+from g1_perception.core.ball_map import (  # noqa: E402
+    GATE_RADII,
+    BallMap,
+    MappedBall,
 )
 from g1_perception.core.frame_utils import (  # noqa: E402
     depth_to_m,
@@ -54,14 +65,20 @@ from g1_perception.core.types import Frame  # noqa: E402
 from g1_perception.segmenters.yolo_seg import YoloSegSegmenter  # noqa: E402
 
 SEEN_FRAME_PREFIX = 'ball_seen_'
+# A new ball this close (in its radii) to a known one may be the same ball
+# whose position jumped (odom drift, depth bias): logged as a warning.
+SPLIT_WARN_RADII = 4.0
 
 DEFAULT_PARAMS: dict[str, Any] = {
     'color_topic': '/camera/d435/color/image_raw',
     'depth_topic': '/camera/d435/aligned_depth_to_color/image_raw',
     'camera_info_topic': '/camera/d435/color/camera_info',
     'balls_topic': '/perception/balls',
+    'seen_topic': '/perception/balls/seen',
     'debug_image_topic': '/perception/balls/debug_image',
     'world_frame': 'odom',
+    'ball_name_prefix': 'ball_',
+    'publish_rate_hz': 5.0,
     'tf_timeout_s': 0.1,
     'model_path': '/ws/models/cubes_seg_v4_aug.engine',
     'device': '0',
@@ -88,18 +105,24 @@ class _LatestBundle:
 
 class BallNode(Node):
     """
-    Detect red balls and publish each one seen as TF ``ball_seen_<K>``.
+    Detect red balls and keep them in a map in ``world_frame`` (``odom``).
 
-    No tracking or memory yet. Every processed frame publishes the balls
-    it sees whose outline was fitted and whose depth profile is a ball
-    (:attr:`BallObservation.trusted`; a ball hidden too much, a flat red
-    blob or a second mask on one ball is only logged and drawn), nearest
-    first, as ``ball_seen_1..N`` in ``world_frame`` stamped with that
-    frame, and the same centres as a PoseArray on ``balls_topic``. ``K`` is the
-    rank by distance in that frame, not a stable id; a ball out of view
-    leaves its old frame in TF, whose stamp tells its age. Without the TF
-    camera -> ``world_frame`` (or with ``world_frame: ""``) the balls are
-    published in the camera frame.
+    Every processed frame takes the balls it sees whose outline was fitted
+    and whose depth profile is a ball (:attr:`BallObservation.trusted`; a
+    ball hidden too much, a flat red blob or a second mask on one ball is
+    only logged and drawn) into a :class:`BallMap`. A ball seen in
+    ``CONFIRM_FRAMES`` frames gets a stable name ``ball_<N>`` and stays in
+    the map while out of view.
+
+    At ``publish_rate_hz`` every ball of the map is published as the TF
+    ``ball_<N>`` in ``world_frame`` (stamped now, at its median position)
+    and on ``balls_topic`` (vision_msgs/Detection3DArray, ``id`` = name).
+    Each frame's balls are also published as TF ``ball_seen_<K>`` (``K`` =
+    rank by distance, stamped with the frame) and a PoseArray on
+    ``seen_topic``. Without the TF camera -> ``world_frame`` a frame is
+    published as seen in the camera frame but not mapped; with
+    ``world_frame: ""`` the map is in the camera frame (camera standing
+    still). ``~/reset`` (std_srvs/Trigger) empties the map.
 
     Like perception_node, only the newest synchronized frame is processed.
     """
@@ -115,6 +138,11 @@ class BallNode(Node):
         self._world_frame = str(p['world_frame']).strip()
         self._labels = [str(x) for x in p['ball_labels']]
         self._border_px = int(p['border_px'])
+        self._prefix = str(p['ball_name_prefix'])
+        self._map = BallMap()
+        self._map_lock = threading.Lock()
+        self._map_frame: str | None = None
+        self._last_map_tf_ns = -1
 
         self._segmenter = YoloSegSegmenter(
             model_path=p['model_path'],
@@ -141,7 +169,13 @@ class BallNode(Node):
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
         self._tf_broadcaster = TransformBroadcaster(self)
-        self._pub_balls = self.create_publisher(PoseArray, p['balls_topic'], 10)
+        self._pub_balls = self.create_publisher(
+            Detection3DArray, p['balls_topic'], 10
+        )
+        self._pub_seen = self.create_publisher(PoseArray, p['seen_topic'], 10)
+        self._reset_service = self.create_service(
+            Trigger, '~/reset', self._on_reset
+        )
         self._pub_debug = self.create_publisher(Image, p['debug_image_topic'], 1)
 
         self._latest_cv = threading.Condition()
@@ -185,11 +219,20 @@ class BallNode(Node):
             self._on_stats_timer,
             callback_group=MutuallyExclusiveCallbackGroup(),
         )
+        rate = float(p['publish_rate_hz'])
+        if rate <= 0.0:
+            raise ValueError(f'publish_rate_hz must be > 0, got {rate}')
+        self._publish_timer = self.create_timer(
+            1.0 / rate,
+            self._on_publish_timer,
+            callback_group=MutuallyExclusiveCallbackGroup(),
+        )
         self._worker.start()
         log.info(
             f"balls {self._labels} from {p['color_topic']} -> TF "
-            f"{SEEN_FRAME_PREFIX}<K> in {self._world_frame or '(camera)'}, "
-            f"{p['balls_topic']}"
+            f"{self._prefix}<N> in {self._world_frame or '(camera)'} at "
+            f"{rate} Hz, {p['balls_topic']}; per frame {SEEN_FRAME_PREFIX}<K>, "
+            f"{p['seen_topic']}"
         )
 
     def destroy_node(self) -> bool:
@@ -250,12 +293,18 @@ class BallNode(Node):
             stamp=bundle.color.header.stamp,
             frame_id=bundle.color.header.frame_id,
         )
-        self._publish(balls, header)
-        self._log_balls(balls)
+        trusted = [b for b in balls if b.trusted]
+        centres, frame_id, mapped = self._to_world(trusted, header)
+        ids: list[int | None] = [None] * len(trusted)
+        if mapped:
+            ids = self._update_map(trusted, centres, frame_id, frame.stamp)
+        self._publish_seen(centres, Header(stamp=header.stamp, frame_id=frame_id))
 
+        names = self._names(balls, trusted, ids)
+        self._log_balls(balls, names)
         if self._pub_debug.get_subscription_count() > 0:
             debug = draw_balls(
-                frame.rgb, balls,
+                frame.rgb, balls, names=names,
                 inference_ms=inference_ms, backend=self._backend,
             )
             msg = self._bridge.cv2_to_imgmsg(debug, encoding='rgb8')
@@ -272,21 +321,79 @@ class BallNode(Node):
                     reason = b.reject_reason
                     self._n_rejected[reason] = self._n_rejected.get(reason, 0) + 1
 
-    def _publish(self, balls: list[BallObservation], camera: Header) -> None:
-        """Publish TF ``ball_seen_<K>`` and the PoseArray of whole balls."""
-        stamp_ns = Time.from_msg(camera.stamp).nanoseconds
+    def _to_world(
+        self,
+        balls: list[BallObservation],
+        camera: Header,
+    ) -> tuple[list[np.ndarray], str, bool]:
+        """
+        Return ``(centres, frame, mapped)`` of ``balls`` in world_frame.
+
+        Without its TF the centres stay in the camera frame and ``mapped``
+        is False: the camera moves, so they must not enter the map.
+        """
+        centres = [b.position for b in balls]
+        if not self._world_frame or self._world_frame == camera.frame_id:
+            return centres, camera.frame_id, True
+        tf = self._lookup_world(camera)
+        if tf is None:
+            return centres, camera.frame_id, False
+        translation, rotation = tf
+        R = quat_to_rotation_matrix(rotation)
+        return [R @ c + translation for c in centres], self._world_frame, True
+
+    def _update_map(
+        self,
+        balls: list[BallObservation],
+        centres: list[np.ndarray],
+        frame_id: str,
+        stamp: float,
+    ) -> list[int | None]:
+        """Add one frame's balls to the map; log balls that got a name."""
+        with self._map_lock:
+            ids, confirmed = self._map.update(
+                centres, [b.radius_m for b in balls], stamp
+            )
+            self._map_frame = frame_id
+            near = [
+                (ball, self._map.nearest_known(ball.position, exclude=ball.ball_id))
+                for ball in confirmed
+            ]
+        log = self.get_logger()
+        for ball, other in near:
+            x, y, z = ball.position
+            log.info(
+                f'{self._prefix}{ball.ball_id} new at ({x:.2f}, {y:.2f}, {z:.2f}) '
+                f'in {frame_id}, r={ball.radius_m * 100:.1f} cm'
+            )
+            if other is not None and other[1] < SPLIT_WARN_RADII * ball.radius_m:
+                log.warning(
+                    f'{self._prefix}{ball.ball_id} is {other[1] * 100:.1f} cm from '
+                    f'{self._prefix}{other[0].ball_id} (beyond the '
+                    f'{GATE_RADII:.0f}-radius gate): two balls, or one that '
+                    'moved in the map (odom drift)?'
+                )
+        return ids
+
+    def _names(
+        self,
+        balls: list[BallObservation],
+        trusted: list[BallObservation],
+        ids: list[int | None],
+    ) -> list[str]:
+        """Label of each ball: its map name, ``new`` (tentative) or ``-``."""
+        by_obs = {
+            id(b): (f'{self._prefix}{i}' if i is not None else 'new')
+            for b, i in zip(trusted, ids)
+        }
+        return [by_obs.get(id(b), '-') for b in balls]
+
+    def _publish_seen(self, centres: list[np.ndarray], header: Header) -> None:
+        """Publish TF ``ball_seen_<K>`` and the PoseArray of one frame."""
+        stamp_ns = Time.from_msg(header.stamp).nanoseconds
         if stamp_ns <= self._last_stamp_ns:  # TF_REPEATED_DATA on bag --loop
             return
         self._last_stamp_ns = stamp_ns
-        centres = [b.position for b in balls if b.trusted]
-        frame_id = camera.frame_id
-        tf = self._lookup_world(camera)
-        if tf is not None:
-            translation, rotation = tf
-            R = quat_to_rotation_matrix(rotation)
-            centres = [R @ c + translation for c in centres]
-            frame_id = self._world_frame
-        header = Header(stamp=camera.stamp, frame_id=frame_id)
 
         array = PoseArray(header=header)
         transforms: list[TransformStamped] = []
@@ -304,9 +411,83 @@ class BallNode(Node):
             t.transform.translation.z = pose.position.z
             t.transform.rotation.w = 1.0
             transforms.append(t)
-        self._pub_balls.publish(array)
+        self._pub_seen.publish(array)
         if transforms:
             self._tf_broadcaster.sendTransform(transforms)
+
+    def _on_publish_timer(self) -> None:
+        """Publish every ball of the map as TF ``ball_<N>`` and Detection3D."""
+        with self._map_lock:
+            balls = self._map.known()
+            frame_id = self._map_frame
+        if not frame_id or not self.context.ok():
+            return
+        now = self.get_clock().now()
+        # A paused simulation clock would repeat the stamp (TF_REPEATED_DATA).
+        if now.nanoseconds <= self._last_map_tf_ns:
+            return
+        self._last_map_tf_ns = now.nanoseconds
+        header = Header(stamp=now.to_msg(), frame_id=frame_id)
+        self._pub_balls.publish(self._detection_array(balls, header))
+        if not balls:
+            return
+        transforms = []
+        for ball in balls:
+            t = TransformStamped(header=header)
+            t.child_frame_id = f'{self._prefix}{ball.ball_id}'
+            (
+                t.transform.translation.x,
+                t.transform.translation.y,
+                t.transform.translation.z,
+            ) = (float(v) for v in ball.position)
+            t.transform.rotation.w = 1.0
+            transforms.append(t)
+        self._tf_broadcaster.sendTransform(transforms)
+
+    def _detection_array(
+        self,
+        balls: list[MappedBall],
+        header: Header,
+    ) -> Detection3DArray:
+        """
+        Build one Detection3D per map ball.
+
+        ``id`` is the ball name, ``results[0].hypothesis.class_id`` the first
+        ball label, ``bbox`` the ball centre and diameter.
+        """
+        array = Detection3DArray(header=header)
+        for ball in balls:
+            pose = PoseMsg()
+            pose.position.x, pose.position.y, pose.position.z = (
+                float(v) for v in ball.position
+            )
+            pose.orientation.w = 1.0
+            det = Detection3D(header=header)
+            det.id = f'{self._prefix}{ball.ball_id}'
+            hypothesis = ObjectHypothesisWithPose()
+            hypothesis.hypothesis.class_id = self._labels[0] if self._labels else 'ball'
+            hypothesis.hypothesis.score = 1.0
+            hypothesis.pose.pose = pose
+            det.results.append(hypothesis)
+            det.bbox.center = pose
+            det.bbox.size.x = det.bbox.size.y = det.bbox.size.z = 2.0 * ball.radius_m
+            array.detections.append(det)
+        return array
+
+    def _on_reset(
+        self,
+        request: Trigger.Request,
+        response: Trigger.Response,
+    ) -> Trigger.Response:
+        """Empty the ball map before the next attempt."""
+        with self._map_lock:
+            n = len(self._map.known())
+            self._map.reset()
+            self._map_frame = None
+        response.success = True
+        response.message = f'Ball map cleared ({n} balls)'
+        self.get_logger().info(f'reset: {response.message}')
+        return response
 
     def _lookup_world(
         self,
@@ -330,7 +511,7 @@ class BallNode(Node):
         ) as exc:
             self.get_logger().warning(
                 f'No TF {camera.frame_id} -> {target} ({exc}); '
-                f'publishing balls in {camera.frame_id}',
+                f'balls of this frame not mapped (seen in {camera.frame_id})',
                 throttle_duration_sec=5.0,
             )
             return None
@@ -338,14 +519,18 @@ class BallNode(Node):
         q = tf.transform.rotation
         return np.array([t.x, t.y, t.z]), np.array([q.x, q.y, q.z, q.w])
 
-    def _log_balls(self, balls: list[BallObservation]) -> None:
+    def _log_balls(self, balls: list[BallObservation], names: list[str]) -> None:
         """Log the balls in camera distance, at most every ``log_period_s``."""
         period = float(self._params['log_period_s'])
         now = time.monotonic()
         if period <= 0.0 or now - self._last_log < period:
             return
         self._last_log = now
-        self.get_logger().info(f'balls: {format_balls(balls)}')
+        with self._map_lock:
+            n_map = len(self._map.known())
+        self.get_logger().info(
+            f'balls seen: {format_balls(balls, names)}; in map: {n_map}'
+        )
 
     def _on_stats_timer(self) -> None:
         """Log mean inference time and dropped frames every 10 s."""

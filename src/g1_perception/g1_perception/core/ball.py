@@ -395,12 +395,26 @@ def find_balls(
     return out
 
 
-def format_balls(balls: Sequence[BallObservation]) -> str:
-    """Return ``"1: 1.23 m r=3.4 cm, 2: ... (hidden)"`` for logs."""
+def _label(k: int, names: Sequence[str] | None) -> str:
+    """Name of ball ``k`` (0-based): ``names[k]`` unless ``-``, else ``k + 1``."""
+    if names is not None and k < len(names) and names[k] != '-':
+        return names[k]
+    return str(k + 1)
+
+
+def format_balls(
+    balls: Sequence[BallObservation],
+    names: Sequence[str] | None = None,
+) -> str:
+    """
+    Return ``"1: 1.23 m r=3.4 cm, 2: ... (hidden)"`` for logs.
+
+    With ``names`` (e.g. map names, ``-`` = none) they replace the numbers.
+    """
     return ', '.join(
-        f'{i}: {b.distance_m:.2f} m r={b.radius_m * 100:.1f} cm'
+        f'{_label(k, names)}: {b.distance_m:.2f} m r={b.radius_m * 100:.1f} cm'
         + (f' ({b.reject_reason})' if b.reject_reason else '')
-        for i, b in enumerate(balls, start=1)
+        for k, b in enumerate(balls)
     ) or 'none'
 
 
@@ -408,23 +422,25 @@ def draw_balls(
     rgb: NDArray[np.uint8],
     balls: Sequence[BallObservation],
     *,
+    names: Sequence[str] | None = None,
     inference_ms: float | None = None,
     backend: str | None = None,
 ) -> NDArray[np.uint8]:
     """
-    Render masks, fitted circles and ``K d=.. r=..`` labels on ``rgb``.
+    Render masks, fitted circles and ``name d=.. r=..`` labels on ``rgb``.
 
-    Red = published, yellow = rejected (reason in the label).
+    Red = published, yellow = rejected (reason in the label). Without
+    ``names`` the balls are numbered nearest first.
     """
     out = rgb.copy()
-    for i, b in enumerate(balls, start=1):
+    for k, b in enumerate(balls):
         color = (255, 40, 40) if b.trusted else (255, 200, 0)
         mask = b.detection.mask
         out[mask] = (0.55 * out[mask] + 0.45 * np.array(color)).astype(np.uint8)
         center = (int(round(b.fit.pixel[0])), int(round(b.fit.pixel[1])))
         cv2.circle(out, center, max(1, int(round(b.fit.radius_px))), color, 1)
         cv2.drawMarker(out, center, color, cv2.MARKER_CROSS, 8, 1)
-        text = f'{i} {b.distance_m:.2f}m r={b.radius_m * 100:.1f}cm'
+        text = f'{_label(k, names)} {b.distance_m:.2f}m r={b.radius_m * 100:.1f}cm'
         if b.reject_reason:
             text += f' {b.reject_reason}'
         org = (center[0] + int(b.fit.radius_px) + 4, center[1])

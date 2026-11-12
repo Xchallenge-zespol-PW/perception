@@ -195,3 +195,14 @@ def test_two_touching_balls_are_both_kept():
     b_mask &= ~a_mask
     balls = find_balls([_det(a_mask), _det(b_mask)], depth, K)
     assert all(b.trusted for b in balls) and len(balls) == 2
+
+
+def test_map_names_replace_numbers_in_log_and_image():
+    near_mask, near_depth = _render_sphere((0.1, 0.0, 1.0))
+    far_mask, far_depth = _render_sphere((-0.2, 0.0, 2.0), background=4.0)
+    depth = np.where(near_mask, near_depth, far_depth)
+    balls = find_balls([_det(far_mask), _det(near_mask)], depth, K)
+    text = format_balls(balls, ['ball_3', '-'])
+    assert text.startswith('ball_3: 1.0') and ', 2: 2.0' in text
+    rgb = np.zeros((H, W, 3), np.uint8)
+    assert draw_balls(rgb, balls, names=['ball_3', 'new']).any()

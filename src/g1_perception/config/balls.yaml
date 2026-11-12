@@ -1,5 +1,5 @@
-# Exercise 2: red balls on the racks -> TF ball_seen_<K> in odom (step 1:
-# every ball seen in the current frame, nearest first, no tracking yet).
+# Exercise 2: red balls on the racks -> map in odom, TF ball_<N> (stable
+# names, kept while out of view) and per frame TF ball_seen_<K>.
 #   ros2 launch g1_perception balls.launch.py
 # Laptop RealSense (no robot TF):
 #   ros2 launch g1_perception balls.launch.py camera_ns:=/camera/camera world_frame:=none \
@@ -13,9 +13,14 @@ ball_node:
     sync_queue_size: 10
     sync_slop_s: 0.05
 
-    # Outputs: PoseArray of ball centres, debug image only while subscribed
+    # Outputs: the map (vision_msgs/Detection3DArray, id = ball_<N>) and TF
+    # ball_<N> at publish_rate_hz; the balls of each frame (PoseArray) and TF
+    # ball_seen_<K>; debug image only while subscribed. ~/reset empties the map.
     balls_topic: /perception/balls
+    seen_topic: /perception/balls/seen
     debug_image_topic: /perception/balls/debug_image
+    ball_name_prefix: ball_
+    publish_rate_hz: 5.0
     # Frame fixed to the arena while the robot walks (odom -> pelvis from
     # the robot state). "" = camera frame.
     world_frame: odom
