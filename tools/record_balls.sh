@@ -40,7 +40,7 @@ if [[ ! "$DUR" =~ ^[0-9]+$ ]] || [ "$DUR" -eq 0 ]; then
 fi
 
 BAG_DIR="${BAG_DIR:-/bags}"
-mkdir -p "$BAG_DIR"
+[ -d "$BAG_DIR" ] || { echo "BLAD: brak katalogu $BAG_DIR (czy ~/bags jest zamontowany?)"; exit 1; }
 STAMP=$(date +%Y%m%d_%H%M%S)
 NAME="pilki_${COUNT}_${SHELF}_${LIGHT}_${STAMP}"
 
