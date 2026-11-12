@@ -55,6 +55,7 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 │   ├── config/                    # rois, labels, params_{laptop,robot}.yaml
 │   ├── launch/perception.launch.py  # config:=params_laptop.yaml (domyślnie)
 │   ├── launch/apriltag.launch.py    # config:=apriltag.yaml
+│   ├── launch/balls.launch.py       # config:=balls.yaml (etap 2)
 ├── deploy/                        # requirements-robot.txt, constraints.txt (numpy<2)
 ├── docs/robot.md                  # Jetson Orin NX / Humble / TensorRT GPU + ONNX CPU
 │   ├── g1_perception/
@@ -68,12 +69,14 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 │   │   │   ├── debug_vis.py
 │   │   │   ├── geometry.py
 │   │   │   ├── apriltag.py        # AprilTag: aruco + IPPE
+│   │   │   ├── ball.py            # środek i promień piłki z maski + głębi
 │   │   │   ├── tf_chain.py        # TF z /tf w bagu (offline)
 │   │   │   └── visibility.py      # bramki aktualizacji pozy (ucięta / zasłonięta kostka, obrót kamery)
 │   │   ├── node_config.py
 │   │   ├── ros_conversions.py
 │   │   ├── perception_node.py     # entry point: perception_node
 │   │   ├── apriltag_node.py       # entry point: apriltag_node
+│   │   ├── ball_node.py           # entry point: ball_node (etap 2)
 │   │   ├── segmenters/
 │   │   │   ├── hsv.py             # @register("hsv")
 │   │   │   └── yolo_seg.py        # @register("yolo_seg")
@@ -313,6 +316,26 @@ ros2 bag record -s mcap -o tagi_$(date +%Y%m%d_%H%M%S) \
 
 Tagi: druk matowy, płasko, z białą ramką wokół; zmierz bok czarnego kwadratu; każdy tag inne id. Przy chodzeniu rozmycie ruchu psuje rogi: lepsze światło / krótsza ekspozycja kamery.
 
+## Węzeł piłek (`ball_node`, etap 2)
+
+Krok 1: każda piłka widoczna w bieżącej klatce jako TF, bez śledzenia i pamięci. Model ten sam co dla kostek (v4, klasa `red ball`).
+
+```bash
+ros2 launch g1_perception balls.launch.py                  # robot: /camera/d435, odom, TensorRT
+# laptop z RealSense, bez TF robota:
+ros2 launch g1_perception balls.launch.py camera_ns:=/camera/camera world_frame:=none \
+  model_path:=/ws/models/cubes_seg_v4_aug.onnx device:=cpu
+```
+
+| Wyjście | Opis |
+|---------|------|
+| TF `ball_seen_<K>` | środek piłki w `world_frame` (`odom`), stempel klatki; `K` = kolejność od najbliższej w tej klatce, **nie** stały numer. Piłka poza kadrem zostawia stary TF (wiek = stempel) |
+| `/perception/balls` (`geometry_msgs/PoseArray`) | środki piłek z klatki w tej samej kolejności |
+| `/perception/balls/debug_image` | maska, okrąg, `K odległość r=promień`; żółta = ucięta krawędzią kadru (nie publikowana); rysowany tylko przy subskrybencie |
+| log co `log_period_s` | `balls: 1: 1.73 m r=3.4 cm, 2: ...` (odległość od kamery) |
+
+Pozycja: środek maski wyznacza promień widzenia, jej pole promień w pikselach `r_px`; mediana głębi z wewnętrznego koła maski to przód piłki `z_s`, środek leży o `r = r_px·z_s/(f − r_px)` dalej. Rozmiar piłki nie jest parametrem: zmierzony `r` sprawdza, czy pozycja ma sens (rzeczywisty promień piłki ≈ wynik z logu).
+
 ---
 
 ## Typowy workflow offline
@@ -359,7 +382,7 @@ Zapis: `/bags/kostki_.../` + wiersz w `/bags/labels.csv` (przy pierwszym uruchom
 
 ### `record_balls.sh` — nagrywanie baga z piłkami (etap 2)
 
-Wymaga działającej kamery RealSense. Te same topiki co `record_cubes.sh`.
+Wymaga działającej kamery RealSense. Te same topiki co `record_cubes.sh` (kamera + `/tf` + `/tf_static`); prefiks kamery `CAM_NS` (domyślnie `/camera/camera`, na robocie `CAM_NS=/camera/d435`).
 
 ```bash
 ./tools/record_balls.sh <liczba_pilek> <polka> <swiatlo> [czas_s] [uwagi]

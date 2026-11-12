@@ -13,6 +13,8 @@
 # [czas_s]:       domyślnie 10
 #
 # Katalog bagów można nadpisać zmienną BAG_DIR (domyślnie /bags).
+# Prefiks tematów kamery: CAM_NS (domyślnie /camera/camera; na robocie
+#   CAM_NS=/camera/d435 ./record_balls.sh ...).
 
 set -e
 
@@ -44,11 +46,14 @@ BAG_DIR="${BAG_DIR:-/bags}"
 STAMP=$(date +%Y%m%d_%H%M%S)
 NAME="pilki_${COUNT}_${SHELF}_${LIGHT}_${STAMP}"
 
+CAM_NS="${CAM_NS:-/camera/camera}"
+# /tf: pozycja kamery w odom przy każdej klatce (robot chodzi wzdłuż regału).
 TOPICS=(
-  /camera/camera/color/image_raw
-  /camera/camera/color/camera_info
-  /camera/camera/aligned_depth_to_color/image_raw
-  /camera/camera/aligned_depth_to_color/camera_info
+  "${CAM_NS}/color/image_raw"
+  "${CAM_NS}/color/camera_info"
+  "${CAM_NS}/aligned_depth_to_color/image_raw"
+  "${CAM_NS}/aligned_depth_to_color/camera_info"
+  /tf
   /tf_static
 )
 

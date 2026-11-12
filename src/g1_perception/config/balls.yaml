@@ -1,0 +1,35 @@
+# Exercise 2: red balls on the racks -> TF ball_seen_<K> in odom (step 1:
+# every ball seen in the current frame, nearest first, no tracking yet).
+#   ros2 launch g1_perception balls.launch.py
+# Laptop RealSense (no robot TF):
+#   ros2 launch g1_perception balls.launch.py camera_ns:=/camera/camera world_frame:=none \
+#     model_path:=/ws/models/cubes_seg_v4_aug.onnx device:=cpu
+ball_node:
+  ros__parameters:
+    # Inputs (robot: D435i in the head, rgb8 + aligned depth 16UC1 mm)
+    color_topic: /camera/d435/color/image_raw
+    depth_topic: /camera/d435/aligned_depth_to_color/image_raw
+    camera_info_topic: /camera/d435/color/camera_info
+    sync_queue_size: 10
+    sync_slop_s: 0.05
+
+    # Outputs: PoseArray of ball centres, debug image only while subscribed
+    balls_topic: /perception/balls
+    debug_image_topic: /perception/balls/debug_image
+    # Frame fixed to the arena while the robot walks (odom -> pelvis from
+    # the robot state). "" = camera frame.
+    world_frame: odom
+    tf_timeout_s: 0.1
+
+    # Model: the cube model v4 also has the class "red ball". TensorRT on the
+    # GPU, ONNX on the CPU if the engine cannot load.
+    model_path: /ws/models/cubes_seg_v4_aug.engine
+    device: "0"
+    fallback_model_path: /ws/models/cubes_seg_v4_aug.onnx
+    fallback_device: cpu
+    warmup_runs: 2
+    conf: 0.35
+    ball_labels: ["red ball"]       # raw model class names
+
+    border_px: 3                    # mask within this of the image edge = cut, not published
+    log_period_s: 1.0               # "balls: 1: 1.23 m r=3.4 cm, ..." (0 = off)

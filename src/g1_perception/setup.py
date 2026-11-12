@@ -33,6 +33,7 @@ setup(
         'console_scripts': [
             'perception_node = g1_perception.perception_node:main',
             'apriltag_node = g1_perception.apriltag_node:main',
+            'ball_node = g1_perception.ball_node:main',
         ],
     },
 )
