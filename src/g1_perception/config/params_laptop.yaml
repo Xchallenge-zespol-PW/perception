@@ -90,7 +90,8 @@ perception_node:
     # A lost cube is found again by a track that voted its colour, lived
     # reid_min_frames frames and stands within reid_max_dz_m of its last height:
     # within reid_near_m of its last pose (x, y), or, pushed out of view, within
-    # reid_gate_m of it along slot_axis but not at the last pose of another cube.
+    # reid_gate_m of it along the line of the start cubes but not at the last
+    # pose of another cube.
     # A track missed for up to reid_hold_s keeps its name (no flipping at rest).
     reid_gate_m: 0.025
     reid_near_m: 0.03

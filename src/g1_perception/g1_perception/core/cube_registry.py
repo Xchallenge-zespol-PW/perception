@@ -80,9 +80,12 @@ class CubeRegistry:
       at, so a detection above the table takes no name;
     - is within ``reid_near_m`` (in the plane, x and y) of where the cube was
       last seen, or, for a cube pushed while out of view, within
-      ``reid_gate_m`` of it along ``axis`` (the line of the cubes; pushes go
-      across it) and not within ``reid_near_m`` of where another cube was
-      last seen, which is that cube's place, not this one's.
+      ``reid_gate_m`` of it along the line of the cubes (pushes go across it)
+      and not within ``reid_near_m`` of where another cube was last seen,
+      which is that cube's place, not this one's. The line is the main axis
+      of the start poses in the plane, ``axis`` only for a layout too short
+      to give one: with a robot turned a few degrees to the table, a cube
+      pushed 30 cm across the line moves centimetres along ``axis``.
 
     Matches in the plane win over matches along the line. Every name keeps
     the pose it was last seen at (:meth:`known`) and the stamp of that
@@ -136,6 +139,8 @@ class CubeRegistry:
         self.reid_min_frames = int(reid_min_frames)
         self.reid_require_color = bool(reid_require_color)
         self._bindings: list[_Binding] = []
+        # Direction of the line of the cubes in the plane (unit x, y).
+        self._line = np.eye(3)[self._axis][:2]
         self._candidate: tuple[tuple[int, int | None, str], ...] | None = None
         self._candidate_since = 0.0
         self._latest: float | None = None
@@ -219,6 +224,9 @@ class CubeRegistry:
             )
             for s in slots
         ]
+        self._line = _line_direction(
+            [s.pose.position for s in slots], np.eye(3)[self._axis][:2]
+        )
         self._start_id += 1
         self._candidate = None
         return True
@@ -317,10 +325,11 @@ class CubeRegistry:
         if distance <= self.reid_near_m:
             return (0, distance)
 
-        offset = abs(
-            float(position[self._axis])
-            - float(binding.last_pose.position[self._axis])
-        )
+        offset = abs(float(np.dot(
+            position[:2]
+            - np.asarray(binding.last_pose.position, dtype=np.float64)[:2],
+            self._line,
+        )))
         if offset > self.reid_gate_m:
             return None
         # Where another cube was last seen is that cube's place.
@@ -330,6 +339,24 @@ class CubeRegistry:
             if _planar_distance(position, other.last_pose.position) <= self.reid_near_m:
                 return None
         return (1, offset)
+
+
+def _line_direction(positions, fallback: np.ndarray) -> np.ndarray:
+    """
+    Return the main axis (x, y) of ``positions``, or ``fallback``.
+
+    ``fallback`` is the axis for fewer than two positions or an RMS spread
+    under 2 cm; the result points the same way as ``fallback``.
+    """
+    points = np.asarray([[float(p[0]), float(p[1])] for p in positions])
+    if len(points) < 2:
+        return np.asarray(fallback, dtype=np.float64)
+    centred = points - points.mean(axis=0)
+    _, singular, vt = np.linalg.svd(centred, full_matrices=False)
+    if singular[0] / np.sqrt(len(points)) < 0.02:
+        return np.asarray(fallback, dtype=np.float64)
+    line = vt[0]
+    return line if float(np.dot(line, fallback)) >= 0.0 else -line
 
 
 def _planar_distance(first, second) -> float:
