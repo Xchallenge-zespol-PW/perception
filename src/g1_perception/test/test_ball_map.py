@@ -157,3 +157,11 @@ def test_present_seen_or_a_long_gap_cancel_the_removal():
     m2.check_views({1: VIEW_EMPTY}, 1.0 + EMPTY_TIMEOUT_S + 0.5)
     assert m2.empty_for(1, 2.6) == pytest.approx(0.1)  # restarted at 2.5
     assert len(m2.known()) == 2
+
+
+def test_residuals_of_known_balls():
+    m = _known_map()
+    m.update([A + np.array([0.01, 0.0, 0.0]), B], [R, R], 2.0)
+    assert sorted(m.last_residuals) == pytest.approx([0.0, 0.01])
+    m.update([A * 3], [R], 2.1)  # new tentative ball: no residual
+    assert m.last_residuals == []

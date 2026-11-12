@@ -64,8 +64,12 @@ from g1_perception.core.frame_utils import (  # noqa: E402
     depth_to_m,
     intrinsics_from_k,
 )
-from g1_perception.core.geometry import quat_to_rotation_matrix  # noqa: E402
+from g1_perception.core.geometry import (  # noqa: E402
+    quat_to_rotation_matrix,
+    rotation_matrix_to_quat_xyzw,
+)
 from g1_perception.core.types import Frame  # noqa: E402
+from g1_perception.core.visibility import angular_speed_deg_s  # noqa: E402
 from g1_perception.segmenters.yolo_seg import YoloSegSegmenter  # noqa: E402
 
 SEEN_FRAME_PREFIX = 'ball_seen_'
@@ -92,6 +96,7 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'conf': 0.35,
     'ball_labels': ['red ball'],
     'border_px': 3,
+    'max_camera_rot_deg_s': 30.0,
     'log_period_s': 1.0,
     'sync_queue_size': 10,
     'sync_slop_s': 0.05,
@@ -118,7 +123,9 @@ class BallNode(Node):
     ``CONFIRM_FRAMES`` frames gets a stable name ``ball_<N>`` and stays in
     the map while out of view or hidden. A ball whose place is in view but
     seen empty (depth behind it, no detection) for ``EMPTY_TIMEOUT_S``
-    leaves the map (taken); its name is not reused.
+    leaves the map (taken); its name is not reused. While the camera turns
+    faster than ``max_camera_rot_deg_s`` in ``world_frame`` (motion blur,
+    image and TF out of step) a frame neither adds to the map nor removes.
 
     At ``publish_rate_hz`` every ball of the map is published as the TF
     ``ball_<N>`` in ``world_frame`` (stamped now, at its median position)
@@ -149,6 +156,9 @@ class BallNode(Node):
         self._map_lock = threading.Lock()
         self._map_frame: str | None = None
         self._last_map_tf_ns = -1
+        self._max_rot_deg_s = float(p['max_camera_rot_deg_s'])
+        # (stamp, rotation_xyzw) of the camera in world_frame, last frame.
+        self._prev_camera: tuple[float, np.ndarray] | None = None
 
         self._segmenter = YoloSegSegmenter(
             model_path=p['model_path'],
@@ -195,6 +205,10 @@ class BallNode(Node):
         self._skipped = 0
         self._n_balls = 0
         self._n_rejected: dict[str, int] = {}
+        self._fit_ms_sum = 0.0
+        self._n_turning = 0
+        self._rot_speeds: list[float] = []
+        self._residuals: list[float] = []
 
         self._stop = threading.Event()
         self._worker = threading.Thread(
@@ -287,11 +301,11 @@ class BallNode(Node):
             return
         t0 = time.perf_counter()
         detections = self._segmenter.segment(frame)
+        t1 = time.perf_counter()
         balls = find_balls(
             detections, frame.depth_m, frame.K,
             labels=self._labels, border_px=self._border_px,
         )
-        inference_ms = (time.perf_counter() - t0) * 1000.0
         if self._stop.is_set() or not self.context.ok():
             return
 
@@ -301,14 +315,21 @@ class BallNode(Node):
         )
         trusted = [b for b in balls if b.trusted]
         centres, frame_id, mapped, world_tf = self._to_world(trusted, header)
+        speed = self._camera_rot_speed(world_tf, frame.stamp)
+        turning = 0.0 < self._max_rot_deg_s < (speed or 0.0)
         ids: list[int | None] = [None] * len(trusted)
         marks: list[tuple[tuple[float, float], float, str]] = []
-        if mapped:
+        residuals: list[float] = []
+        if mapped and not turning:
             ids = self._update_map(trusted, centres, frame_id, frame.stamp)
+            with self._map_lock:
+                residuals = list(self._map.last_residuals)
             marks = self._check_views(ids, world_tf, frame)
+        t2 = time.perf_counter()
+        inference_ms = (t2 - t0) * 1000.0
         self._publish_seen(centres, Header(stamp=header.stamp, frame_id=frame_id))
 
-        names = self._names(balls, trusted, ids)
+        names = self._names(balls, trusted, ids, 'turn' if turning else 'new')
         self._log_balls(balls, names)
         if self._pub_debug.get_subscription_count() > 0:
             debug = draw_balls(
@@ -320,8 +341,13 @@ class BallNode(Node):
             self._pub_debug.publish(msg)
 
         with self._stats_lock:
-            self._infer_ms_sum += inference_ms
+            self._infer_ms_sum += (t1 - t0) * 1000.0
+            self._fit_ms_sum += (t2 - t1) * 1000.0
             self._infer_count += 1
+            self._n_turning += int(turning)
+            if speed is not None:
+                self._rot_speeds.append(speed)
+            self._residuals.extend(residuals)
             for b in balls:
                 if b.trusted:
                     self._n_balls += 1
@@ -355,6 +381,21 @@ class BallNode(Node):
             [R @ c + translation for c in centres], self._world_frame, True,
             (R, translation),
         )
+
+    def _camera_rot_speed(
+        self,
+        world_tf: tuple[np.ndarray, np.ndarray] | None,
+        stamp: float,
+    ) -> float | None:
+        """Camera rotation speed (deg/s) in world_frame since the last frame."""
+        if world_tf is None:
+            self._prev_camera = None
+            return None
+        quat = rotation_matrix_to_quat_xyzw(world_tf[0])
+        prev, self._prev_camera = self._prev_camera, (stamp, quat)
+        if prev is None or stamp <= prev[0]:
+            return None
+        return angular_speed_deg_s(prev[1], prev[0], quat, stamp)
 
     def _check_views(
         self,
@@ -434,10 +475,11 @@ class BallNode(Node):
         balls: list[BallObservation],
         trusted: list[BallObservation],
         ids: list[int | None],
+        unnamed: str = 'new',
     ) -> list[str]:
-        """Label of each ball: its map name, ``new`` (tentative) or ``-``."""
+        """Label of each ball: map name, ``unnamed`` (no name yet) or ``-``."""
         by_obs = {
-            id(b): (f'{self._prefix}{i}' if i is not None else 'new')
+            id(b): (f'{self._prefix}{i}' if i is not None else unnamed)
             for b, i in zip(trusted, ids)
         }
         return [by_obs.get(id(b), '-') for b in balls]
@@ -587,21 +629,47 @@ class BallNode(Node):
         )
 
     def _on_stats_timer(self) -> None:
-        """Log mean inference time and dropped frames every 10 s."""
+        """
+        Log timing, balls and map health every 10 s.
+
+        ``seg_ms`` is YOLO, ``fit_ms`` ball fit + map + view checks;
+        ``rot_deg_s`` the camera rotation speed in world_frame (p50/p95, to
+        set ``max_camera_rot_deg_s``), ``match_mm`` how far the observations
+        of known balls lie from their map position (p50/p95; grows with
+        odom drift).
+        """
         with self._stats_lock:
-            count, total_ms, n_balls = (
-                self._infer_count, self._infer_ms_sum, self._n_balls
+            count, seg_ms, fit_ms, n_balls = (
+                self._infer_count, self._infer_ms_sum, self._fit_ms_sum,
+                self._n_balls,
             )
             rejected, self._n_rejected = self._n_rejected, {}
-            self._infer_count = self._n_balls = 0
-            self._infer_ms_sum = 0.0
+            turning, speeds, residuals = (
+                self._n_turning, self._rot_speeds, self._residuals
+            )
+            self._infer_count = self._n_balls = self._n_turning = 0
+            self._infer_ms_sum = self._fit_ms_sum = 0.0
+            self._rot_speeds, self._residuals = [], []
         with self._latest_cv:
             skipped, self._skipped = self._skipped, 0
-        avg = f'{total_ms / count:.1f}' if count else '-'
+        with self._map_lock:
+            n_map = len(self._map.known())
+
+        def avg(total: float) -> str:
+            return f'{total / count:.1f}' if count else '-'
+
+        def p50_95(values: list[float], scale: float = 1.0) -> str:
+            if not values:
+                return '-'
+            a, b = np.percentile(np.asarray(values) * scale, [50, 95])
+            return f'{a:.0f}/{b:.0f}'
+
         self.get_logger().info(
-            f'ball stats (10 s): infer_ms_avg={avg} n={count} '
-            f'skipped_frames={skipped} balls_seen={n_balls} '
+            f'ball stats (10 s): seg_ms_avg={avg(seg_ms)} fit_ms_avg={avg(fit_ms)} '
+            f'n={count} skipped_frames={skipped} balls_seen={n_balls} '
             f"rejected={','.join(f'{k}:{v}' for k, v in rejected.items()) or 0} "
+            f'map={n_map} match_mm={p50_95(residuals, 1000.0)} '
+            f'rot_deg_s={p50_95(speeds)} turning_frames={turning} '
             f'backend={self._backend}'
         )
 

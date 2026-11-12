@@ -335,11 +335,11 @@ ros2 launch g1_perception balls.launch.py camera_ns:=/camera/camera world_frame:
 | TF `ball_seen_<K>` | piłki z ostatniej klatki w `world_frame`, stempel klatki; `K` = kolejność od najbliższej, **nie** stały numer. Piłka poza kadrem zostawia stary TF (wiek = stempel) |
 | `/perception/balls/seen` (`geometry_msgs/PoseArray`) | środki piłek z klatki w tej samej kolejności |
 | `/perception/balls/debug_image` | maska, dopasowany okrąg, `K odległość r=promień`; czerwona = publikowana, żółta = odrzucona (powód w etykiecie); rysowany tylko przy subskrybencie |
+| log co 10 s | `ball stats`: `seg_ms_avg` (YOLO), `fit_ms_avg` (dopasowanie + mapa + widoki), `balls_seen`, `rejected=…`, `map` (liczba piłek), `match_mm` p50/p95 (odległość obserwacji znanych piłek od ich pozycji w mapie — rośnie z dryfem `odom`), `rot_deg_s` p50/p95 (obrót kamery w `odom`), `turning_frames` (klatki pominięte przez obrót) |
 | log co `log_period_s` | `balls seen: ball_1: 1.73 m r=3.4 cm, new: 2.07 m ..., 3: 0.95 m r=3.6 cm (duplicate); in map: 2` (odległość od kamery; `new` = jeszcze bez nazwy) |
 | log przy nowej piłce | `ball_3 new at (x, y, z) in odom`; ostrzeżenie, gdy nowa piłka jest bliżej niż 4 promienie od znanej (ta sama piłka przesunięta w mapie?) |
 | log przy usunięciu | `ball_3 removed: its place (x, y, z) seen empty (ball taken)` |
 | debug image | piłki mapy niewykryte w klatce: biały okrąg w miejscu, gdzie powinny być, z widokiem `present` / `empty` / `occluded` / `unknown` |
-| log co 10 s | `ball stats`: `balls_seen` (opublikowane), `rejected=hidden:N,shape:N,duplicate:N` |
 
 Pozycja (`core/ball.py`, bez parametru rozmiaru piłki):
 
@@ -359,7 +359,22 @@ Usuwanie (`view_state`, `BallMap.check_views`): dla każdej piłki mapy niewykry
 | `occluded` | coś > r przed jej przodem (ręka, słupek) | nic |
 | `out_of_view` / `unknown` | piłka nie cała w kadrze / za mało głębi | nic |
 
+Obrót kamery (`max_camera_rot_deg_s`, domyślnie 30°/s): gdy kamera obraca się w `odom` szybciej, klatka nie dodaje do mapy ani nie usuwa (rozmycie, obraz i TF niezgrane w czasie); piłki widać wtedy w obrazie debug jako `turn`. Próg ustaw z `rot_deg_s` w `ball stats` podczas chodzenia wzdłuż regału (p95 przy normalnym chodzie < próg).
+
 Piłka znika po ≥ 5 klatkach `empty` przez ≥ 1 s bez klatki, która ją pokazuje (przerwa > 1 s między klatkami `empty` zaczyna odliczanie od nowa). Odłożona z powrotem dostaje nową nazwę (numery się nie powtarzają). Piłka tuż przy ścianie (mniej niż r za nią) nigdy nie wygląda na pustą i zostaje w mapie.
+
+Na robocie:
+
+```bash
+# laptop: modele na robota (raz)
+./tools/deploy_robot.sh models/cubes_seg_v4_aug.pt models/cubes_seg_v4_aug.onnx unitree@192.168.123.164
+# robot, raz na nowy model / JetPack: silnik TensorRT budowany na tym Jetsonie
+python3 /ws/src/perception/tools/export_model.py /ws/models/cubes_seg_v4_aug.pt --formats engine --out /ws/models
+# terminal 1: stan robota (odom -> pelvis), terminal 2:
+ros2 launch g1_perception balls.launch.py
+```
+
+Co sprawdzić w `ball stats`: `backend=engine:0` (nie `fallback`), `match_mm` p95 przy chodzeniu wzdłuż regału i z powrotem (powyżej ~30 mm piłki zaczynają się rozdwajać: bramka to 2 promienie ≈ 66 mm; wtedy ostrzeżenia `... two balls, or one that moved`), `rot_deg_s` vs `turning_frames`. Mapa w RViz: Fixed Frame `odom`, TF.
 
 Na bagach z 2026-11-11 (kamera nieruchoma, mapa w ramce kamery): zero fałszywych usunięć; symulowane zabranie najbliższej piłki (wykrycie usunięte, głębia za nią) usuwa ją po 1,0–1,07 s, pozostałe zostają. Bag z kamerą w ręce (`..._211827`) bez `odom` przesuwa piłki w ramce kamery, więc tam mapa się rozjeżdża — na robocie mapa jest w `odom`. Bez TF kamera → `odom` klatka nie trafia do mapy (kamera się rusza), tylko do `ball_seen_<K>` w ramce kamery.
 

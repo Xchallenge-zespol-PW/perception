@@ -133,6 +133,9 @@ class BallMap:
         self._balls: list[_Ball] = []
         self._next_id = 1
         self._latest: float | None = None
+        # Distance (m) of each matched observation of the last update from
+        # its ball: grows when the map frame drifts (odom while walking).
+        self.last_residuals: list[float] = []
 
     def reset(self) -> None:
         """Forget all balls; ids start again at 1."""
@@ -175,11 +178,14 @@ class BallMap:
 
         owner: dict[int, _Ball] = {}
         used: set[int] = set()
-        for _, i, j in candidates:
+        self.last_residuals = []
+        for dist, i, j in candidates:
             if i in owner or j in used:
                 continue
             owner[i] = self._balls[j]
             used.add(j)
+            if self._balls[j].ball_id is not None:
+                self.last_residuals.append(dist)
 
         ids: list[int | None] = []
         confirmed: list[MappedBall] = []
