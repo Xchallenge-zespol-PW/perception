@@ -284,10 +284,14 @@ ros2 launch g1_perception apriltag.launch.py tag_size_m:=0.162 target_frame:=pel
 |---------|----|
 | TF `tag_<id>` | pod ramką optyczną kamery, stempel obrazu. Środek tagu, x w prawo, y w górę, z z nadrukowanej strony (dla tagu na podłodze: w górę) |
 | `/apriltag/detections` (`vision_msgs/Detection3DArray`) | `id` = numer tagu, `class_id` = `tag36h11`, `score` = 1 / (1 + błąd reprojekcji px), poza w `target_frame` (gdy jego TF jest znany, inaczej w ramce kamery), `bbox.size` = bok tagu |
+| `/apriltag/summary` (`std_msgs/String`) | co klatkę JSON z numerem i odległością kamera–środek tagu: `[{"id": 7, "distance_m": 1.832}]` (`[]` = brak tagów z pozą); odległość zawsze od kamery, niezależnie od `target_frame` |
 | `/apriltag/debug_image` | obrysy, numery i osie (x czerwona, y zielona, z niebieska); rysowany tylko przy subskrybencie |
+| log co `log_period_s` | `tags: 7: 1.83 m, 3: 2.41 m` (tylko gdy coś widać; `0` = wyłączony) |
 | log co `stats_period_s` | `frames`, `with_tags`, `ids`, `detect_ms_avg` |
 
-Parametry (`config/apriltag.yaml`): `family`, `tag_size_m` (bok **czarnego** kwadratu, nie białej ramki), `tag_ids` (`"0,1,2"`, `""` = wszystkie), `max_reproj_px` (gorsze dopasowanie rogów = brak pozy), `target_frame`, `tf_prefix`, `publish_tf`, `image_topic`, `camera_info_topic`.
+Parametry (`config/apriltag.yaml`): `family`, `tag_size_m` (bok **czarnego** kwadratu, nie białej ramki), `tag_ids` (`"0,1,2"`, `""` = wszystkie), `max_reproj_px` (gorsze dopasowanie rogów = brak pozy), `target_frame`, `tf_prefix`, `publish_tf`, `image_topic`, `camera_info_topic`, `summary_topic`, `log_period_s`.
+
+Podgląd numerów i odległości: `ros2 topic echo /apriltag/summary`. Odległość zależy od `tag_size_m` (zły bok = odległość przeskalowana o ten sam czynnik).
 
 Nagranie do późniejszej analizy (`tools/apriltag_from_bag.py`) musi mieć TF, inaczej nie da się przeliczyć tagów do ramek robota:
 
