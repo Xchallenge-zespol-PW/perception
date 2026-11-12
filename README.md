@@ -318,7 +318,7 @@ Tagi: druk matowy, płasko, z białą ramką wokół; zmierz bok czarnego kwadra
 
 ## Węzeł piłek (`ball_node`, etap 2)
 
-Mapa piłek w `odom` ze stałymi nazwami `ball_<N>` (krok 3) i piłki z bieżącej klatki (kroki 1–2). Model ten sam co dla kostek (v4, klasa `red ball`).
+Mapa piłek w `odom` ze stałymi nazwami `ball_<N>`, z której znikają zabrane piłki (kroki 3–4), i piłki z bieżącej klatki (kroki 1–2). Model ten sam co dla kostek (v4, klasa `red ball`).
 
 ```bash
 ros2 launch g1_perception balls.launch.py                  # robot: /camera/d435, odom, TensorRT
@@ -329,7 +329,7 @@ ros2 launch g1_perception balls.launch.py camera_ns:=/camera/camera world_frame:
 
 | Wyjście | Opis |
 |---------|------|
-| TF `ball_<N>` | każda piłka mapy w `world_frame` (`odom`), co `publish_rate_hz` (5 Hz), stempel = teraz, pozycja = mediana 30 ostatnich obserwacji. Nazwa stała przez cały przejazd (numery w kolejności wejścia do mapy), także gdy piłka jest poza kadrem |
+| TF `ball_<N>` | każda piłka mapy w `world_frame` (`odom`), co `publish_rate_hz` (5 Hz), stempel = teraz, pozycja = mediana 30 ostatnich obserwacji. Nazwa stała przez cały przejazd (numery w kolejności wejścia do mapy), także gdy piłka jest poza kadrem lub zasłonięta. Zabrana piłka przestaje być publikowana (jej ostatni TF zostaje w buforze ze starzejącym się stemplem; aktualna lista = `/perception/balls`) |
 | `/perception/balls` (`vision_msgs/Detection3DArray`) | to samo co TF `ball_<N>`: `id` = nazwa, `class_id` = `red ball`, `bbox.size` = zmierzona średnica |
 | `~/reset` (`std_srvs/Trigger`) | czyści mapę, numery od 1 (`ros2 service call /ball_node/reset std_srvs/srv/Trigger`) |
 | TF `ball_seen_<K>` | piłki z ostatniej klatki w `world_frame`, stempel klatki; `K` = kolejność od najbliższej, **nie** stały numer. Piłka poza kadrem zostawia stary TF (wiek = stempel) |
@@ -337,6 +337,8 @@ ros2 launch g1_perception balls.launch.py camera_ns:=/camera/camera world_frame:
 | `/perception/balls/debug_image` | maska, dopasowany okrąg, `K odległość r=promień`; czerwona = publikowana, żółta = odrzucona (powód w etykiecie); rysowany tylko przy subskrybencie |
 | log co `log_period_s` | `balls seen: ball_1: 1.73 m r=3.4 cm, new: 2.07 m ..., 3: 0.95 m r=3.6 cm (duplicate); in map: 2` (odległość od kamery; `new` = jeszcze bez nazwy) |
 | log przy nowej piłce | `ball_3 new at (x, y, z) in odom`; ostrzeżenie, gdy nowa piłka jest bliżej niż 4 promienie od znanej (ta sama piłka przesunięta w mapie?) |
+| log przy usunięciu | `ball_3 removed: its place (x, y, z) seen empty (ball taken)` |
+| debug image | piłki mapy niewykryte w klatce: biały okrąg w miejscu, gdzie powinny być, z widokiem `present` / `empty` / `occluded` / `unknown` |
 | log co 10 s | `ball stats`: `balls_seen` (opublikowane), `rejected=hidden:N,shape:N,duplicate:N` |
 
 Pozycja (`core/ball.py`, bez parametru rozmiaru piłki):
@@ -346,7 +348,20 @@ Pozycja (`core/ball.py`, bez parametru rozmiaru piłki):
 3. **Kształt** (tylko dla piłek o promieniu w obrazie ≥ 10 px, czyli do ok. 1,2 m; dalej D435 wygładza głębię). Promień z profilu głębi musi pasować do promienia z obrysu, inaczej odrzucenie jako `shape` (płaski czerwony obiekt, zła głębia).
 4. **Duplikaty.** Dwa środki bliżej niż jeden promień to ta sama piłka (druga maska YOLO). Zostaje lepsza, druga jest odrzucona jako `duplicate`.
 
-Mapa (`core/ball_map.py`): piłki z klatki są dopasowywane jeden do jednego, od najbliższych, do piłek mapy w promieniu 2 promieni piłki (dwie różne piłki są co najmniej tyle od siebie). Niedopasowana piłka zaczyna kandydata; po 5 klatkach z obserwacją (ok. 0,3 s) dostaje następny numer, a kandydat bez obserwacji przez 1 s znika (pojedyncze fałszywe wykrycia nie dostają nazwy). Piłka z nazwą zostaje w mapie (usuwanie zabranych piłek: krok 4). Bez TF kamera → `odom` klatka nie trafia do mapy (kamera się rusza), tylko do `ball_seen_<K>` w ramce kamery.
+Mapa (`core/ball_map.py`): piłki z klatki są dopasowywane jeden do jednego, od najbliższych, do piłek mapy w promieniu 2 promieni piłki (dwie różne piłki są co najmniej tyle od siebie). Niedopasowana piłka zaczyna kandydata; po 5 klatkach z obserwacją (ok. 0,3 s) dostaje następny numer, a kandydat bez obserwacji przez 1 s znika (pojedyncze fałszywe wykrycia nie dostają nazwy). Piłka z nazwą zostaje w mapie, póki jej miejsca nie widać pustego.
+
+Usuwanie (`view_state`, `BallMap.check_views`): dla każdej piłki mapy niewykrytej w klatce mediana głębi w wewnętrznym kole jej obrazu mówi, co tam jest:
+
+| Widok | Warunek | Skutek |
+|-------|---------|--------|
+| `empty` | głębia za tyłem piłki (> z + r) | liczy się do usunięcia |
+| `present` | coś na głębokości piłki (model jej nie wykrył) | kasuje odliczanie |
+| `occluded` | coś > r przed jej przodem (ręka, słupek) | nic |
+| `out_of_view` / `unknown` | piłka nie cała w kadrze / za mało głębi | nic |
+
+Piłka znika po ≥ 5 klatkach `empty` przez ≥ 1 s bez klatki, która ją pokazuje (przerwa > 1 s między klatkami `empty` zaczyna odliczanie od nowa). Odłożona z powrotem dostaje nową nazwę (numery się nie powtarzają). Piłka tuż przy ścianie (mniej niż r za nią) nigdy nie wygląda na pustą i zostaje w mapie.
+
+Na bagach z 2026-11-11 (kamera nieruchoma, mapa w ramce kamery): zero fałszywych usunięć; symulowane zabranie najbliższej piłki (wykrycie usunięte, głębia za nią) usuwa ją po 1,0–1,07 s, pozostałe zostają. Bag z kamerą w ręce (`..._211827`) bez `odom` przesuwa piłki w ramce kamery, więc tam mapa się rozjeżdża — na robocie mapa jest w `odom`. Bez TF kamera → `odom` klatka nie trafia do mapy (kamera się rusza), tylko do `ball_seen_<K>` w ramce kamery.
 
 Na bagach z 2026-11-11 (co 10. klatka) liczba opublikowanych piłek zgadza się z etykietą w 257/310 klatek. Większość różnic to błędne etykiety (widać więcej piłek niż w nazwie baga). Przy stojącej kamerze środki są stabilne do ±1–7 mm do 2,9 m. Zmierzony promień: mediana 3,3 cm (p5–p95 2,8–4,2 cm, większy na dalekich piłkach, bo maska jest o ok. 1 px za duża).
 

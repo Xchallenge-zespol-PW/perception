@@ -423,6 +423,7 @@ def draw_balls(
     balls: Sequence[BallObservation],
     *,
     names: Sequence[str] | None = None,
+    marks: Sequence[tuple[tuple[float, float], float, str]] = (),
     inference_ms: float | None = None,
     backend: str | None = None,
 ) -> NDArray[np.uint8]:
@@ -430,9 +431,18 @@ def draw_balls(
     Render masks, fitted circles and ``name d=.. r=..`` labels on ``rgb``.
 
     Red = published, yellow = rejected (reason in the label). Without
-    ``names`` the balls are numbered nearest first.
+    ``names`` the balls are numbered nearest first. ``marks`` are known
+    balls not detected, ``((u, v), r_px, text)``, drawn as white circles.
     """
     out = rgb.copy()
+    for (u, v), r_px, text in marks:
+        center = (int(round(u)), int(round(v)))
+        cv2.circle(out, center, max(1, int(round(r_px))), (255, 255, 255), 1)
+        org = (center[0] + int(r_px) + 4, center[1])
+        cv2.putText(out, text, org, cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(out, text, org, cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (255, 255, 255), 1, cv2.LINE_AA)
     for k, b in enumerate(balls):
         color = (255, 40, 40) if b.trusted else (255, 200, 0)
         mask = b.detection.mask

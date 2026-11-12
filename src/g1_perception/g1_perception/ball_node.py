@@ -53,8 +53,12 @@ from g1_perception.core.ball import (  # noqa: E402
 )
 from g1_perception.core.ball_map import (  # noqa: E402
     GATE_RADII,
+    VIEW_OUT,
+    VIEW_SEEN,
     BallMap,
     MappedBall,
+    project,
+    view_state,
 )
 from g1_perception.core.frame_utils import (  # noqa: E402
     depth_to_m,
@@ -112,7 +116,9 @@ class BallNode(Node):
     ball hidden too much, a flat red blob or a second mask on one ball is
     only logged and drawn) into a :class:`BallMap`. A ball seen in
     ``CONFIRM_FRAMES`` frames gets a stable name ``ball_<N>`` and stays in
-    the map while out of view.
+    the map while out of view or hidden. A ball whose place is in view but
+    seen empty (depth behind it, no detection) for ``EMPTY_TIMEOUT_S``
+    leaves the map (taken); its name is not reused.
 
     At ``publish_rate_hz`` every ball of the map is published as the TF
     ``ball_<N>`` in ``world_frame`` (stamped now, at its median position)
@@ -294,17 +300,19 @@ class BallNode(Node):
             frame_id=bundle.color.header.frame_id,
         )
         trusted = [b for b in balls if b.trusted]
-        centres, frame_id, mapped = self._to_world(trusted, header)
+        centres, frame_id, mapped, world_tf = self._to_world(trusted, header)
         ids: list[int | None] = [None] * len(trusted)
+        marks: list[tuple[tuple[float, float], float, str]] = []
         if mapped:
             ids = self._update_map(trusted, centres, frame_id, frame.stamp)
+            marks = self._check_views(ids, world_tf, frame)
         self._publish_seen(centres, Header(stamp=header.stamp, frame_id=frame_id))
 
         names = self._names(balls, trusted, ids)
         self._log_balls(balls, names)
         if self._pub_debug.get_subscription_count() > 0:
             debug = draw_balls(
-                frame.rgb, balls, names=names,
+                frame.rgb, balls, names=names, marks=marks,
                 inference_ms=inference_ms, backend=self._backend,
             )
             msg = self._bridge.cv2_to_imgmsg(debug, encoding='rgb8')
@@ -325,22 +333,68 @@ class BallNode(Node):
         self,
         balls: list[BallObservation],
         camera: Header,
-    ) -> tuple[list[np.ndarray], str, bool]:
+    ) -> tuple[
+        list[np.ndarray], str, bool, tuple[np.ndarray, np.ndarray] | None
+    ]:
         """
-        Return ``(centres, frame, mapped)`` of ``balls`` in world_frame.
+        Return ``(centres, frame, mapped, (R, t))`` of ``balls`` in world_frame.
 
-        Without its TF the centres stay in the camera frame and ``mapped``
-        is False: the camera moves, so they must not enter the map.
+        ``(R, t)`` maps camera to world (None = the map is in the camera
+        frame). Without its TF the centres stay in the camera frame and
+        ``mapped`` is False: the camera moves, so they must not enter the map.
         """
         centres = [b.position for b in balls]
         if not self._world_frame or self._world_frame == camera.frame_id:
-            return centres, camera.frame_id, True
+            return centres, camera.frame_id, True, None
         tf = self._lookup_world(camera)
         if tf is None:
-            return centres, camera.frame_id, False
+            return centres, camera.frame_id, False, None
         translation, rotation = tf
         R = quat_to_rotation_matrix(rotation)
-        return [R @ c + translation for c in centres], self._world_frame, True
+        return (
+            [R @ c + translation for c in centres], self._world_frame, True,
+            (R, translation),
+        )
+
+    def _check_views(
+        self,
+        ids: list[int | None],
+        world_tf: tuple[np.ndarray, np.ndarray] | None,
+        frame: Frame,
+    ) -> list[tuple[tuple[float, float], float, str]]:
+        """
+        Look where each known ball not detected on ``frame`` should be.
+
+        Removes the balls whose place stays empty (taken) and returns debug
+        marks ``((u, v), r_px, text)`` of those in view.
+        """
+        seen = {i for i in ids if i is not None}
+        with self._map_lock:
+            known = self._map.known()
+        views: dict[int, str] = {}
+        marks: list[tuple[tuple[float, float], float, str]] = []
+        for ball in known:
+            if ball.ball_id in seen:
+                views[ball.ball_id] = VIEW_SEEN
+                continue
+            center = ball.position
+            if world_tf is not None:
+                R, t = world_tf
+                center = R.T @ (center - t)
+            view = view_state(center, ball.radius_m, frame.depth_m, frame.K)
+            views[ball.ball_id] = view
+            proj = project(center, ball.radius_m, frame.K)
+            if view != VIEW_OUT and proj is not None:
+                marks.append((proj[0], proj[1], f'{self._prefix}{ball.ball_id} {view}'))
+        with self._map_lock:
+            removed = self._map.check_views(views, frame.stamp)
+        for ball in removed:
+            x, y, z = ball.position
+            self.get_logger().info(
+                f'{self._prefix}{ball.ball_id} removed: its place '
+                f'({x:.2f}, {y:.2f}, {z:.2f}) seen empty (ball taken)'
+            )
+        return marks
 
     def _update_map(
         self,

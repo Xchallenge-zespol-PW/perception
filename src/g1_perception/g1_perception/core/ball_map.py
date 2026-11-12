@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -20,6 +20,23 @@ MAX_SAMPLES = 30
 # balls are at least 2 radii apart (centre to centre), so a ball is never
 # matched to its neighbour unless they touch.
 GATE_RADII = 2.0
+
+# What the camera sees where a ball of the map should be (view_state).
+VIEW_SEEN = 'seen'            # detected on this frame
+VIEW_PRESENT = 'present'      # not detected, but something at its depth
+VIEW_EMPTY = 'empty'          # the depth there is behind the ball: it is gone
+VIEW_OCCLUDED = 'occluded'    # something in front of it
+VIEW_OUT = 'out_of_view'      # outside the image (whole ball not in frame)
+VIEW_UNKNOWN = 'unknown'      # too little depth there
+# Depth is read in the disk of this fraction of the ball's image radius.
+VIEW_DISK_FRAC = 0.5
+MIN_VALID_FRAC = 0.3
+MIN_VIEW_DEPTH_M = 0.2
+# A ball leaves the map after this many frames and this long seen empty
+# with no frame in between showing it (seen or present); a longer gap
+# between empty frames starts the count again.
+EMPTY_FRAMES = 5
+EMPTY_TIMEOUT_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -50,6 +67,9 @@ class _Ball:
     n_obs: int = 0
     positions: deque = field(default_factory=lambda: deque(maxlen=MAX_SAMPLES))
     radii: deque = field(default_factory=lambda: deque(maxlen=MAX_SAMPLES))
+    empty_since: float | None = None
+    last_empty: float | None = None
+    n_empty: int = 0
 
     def add(self, position: NDArray[np.float64], radius: float, stamp: float) -> None:
         """Add one observation."""
@@ -57,6 +77,23 @@ class _Ball:
         self.radii.append(float(radius))
         self.n_obs += 1
         self.last_seen = stamp
+        self.clear_empty()
+
+    def clear_empty(self) -> None:
+        """Forget the frames that saw this ball's place empty."""
+        self.empty_since = self.last_empty = None
+        self.n_empty = 0
+
+    def see_empty(self, stamp: float) -> bool:
+        """Count a frame that saw the place empty; True when the ball is gone."""
+        if self.last_empty is None or stamp - self.last_empty > EMPTY_TIMEOUT_S:
+            self.empty_since, self.n_empty = stamp, 0
+        self.last_empty = stamp
+        self.n_empty += 1
+        return (
+            self.n_empty >= EMPTY_FRAMES
+            and stamp - self.empty_since >= EMPTY_TIMEOUT_S
+        )
 
     @property
     def position(self) -> NDArray[np.float64]:
@@ -87,7 +124,9 @@ class BallMap:
     Each frame's balls are matched one to one, nearest first, to the balls
     of the map within ``GATE_RADII`` radii; an unmatched ball starts a
     tentative one, which gets the next id after ``CONFIRM_FRAMES`` frames.
-    A ball keeps its id while out of view; no ball leaves the map yet.
+    A ball keeps its id while out of view or hidden; it leaves the map only
+    when its place is seen empty (:meth:`check_views`), and its id is never
+    reused.
     """
 
     def __init__(self) -> None:
@@ -157,6 +196,38 @@ class BallMap:
             ids.append(ball.ball_id)
         return ids, confirmed
 
+    def check_views(
+        self,
+        views: Mapping[int, str],
+        stamp: float,
+    ) -> list[MappedBall]:
+        """
+        Apply what a frame saw at the places of known balls (by id).
+
+        ``VIEW_EMPTY`` counts towards removal (``EMPTY_FRAMES`` frames over
+        ``EMPTY_TIMEOUT_S``), ``VIEW_SEEN`` / ``VIEW_PRESENT`` cancel it,
+        the other views change nothing. Returns the balls removed.
+        """
+        stamp = float(stamp)
+        removed: list[_Ball] = []
+        for ball in self._balls:
+            view = views.get(ball.ball_id) if ball.ball_id is not None else None
+            if view == VIEW_EMPTY:
+                if ball.see_empty(stamp):
+                    removed.append(ball)
+            elif view in (VIEW_SEEN, VIEW_PRESENT):
+                ball.clear_empty()
+        if removed:
+            self._balls = [b for b in self._balls if b not in removed]
+        return [b.snapshot() for b in removed]
+
+    def empty_for(self, ball_id: int, stamp: float) -> float | None:
+        """Seconds the place of ``ball_id`` has been seen empty, or None."""
+        for ball in self._balls:
+            if ball.ball_id == ball_id and ball.empty_since is not None:
+                return float(stamp) - ball.empty_since
+        return None
+
     def known(self) -> list[MappedBall]:
         """Return the balls with an id, sorted by id."""
         return sorted(
@@ -178,3 +249,59 @@ class BallMap:
             if best is None or dist < best[1]:
                 best = (b, dist)
         return best
+
+
+def project(
+    center: NDArray[np.float64],
+    radius: float,
+    K: NDArray[np.float64],
+) -> tuple[tuple[float, float], float] | None:
+    """Return the pixel and image radius of a ball (camera optical frame)."""
+    x, y, z = (float(v) for v in center)
+    if z <= MIN_VIEW_DEPTH_M:
+        return None
+    u = float(K[0, 0]) * x / z + float(K[0, 2])
+    v = float(K[1, 1]) * y / z + float(K[1, 2])
+    r_px = 0.5 * (float(K[0, 0]) + float(K[1, 1])) * float(radius) / z
+    return (u, v), r_px
+
+
+def view_state(
+    center: NDArray[np.float64],
+    radius: float,
+    depth_m: NDArray[np.float32],
+    K: NDArray[np.float64],
+) -> str:
+    """
+    Classify what the camera sees where a ball should be (not detected).
+
+    ``center`` is the ball centre in the camera optical frame. The median
+    depth of the inner disk of its image tells: beyond the ball's back
+    (``z + r``) = ``empty``, more than a radius in front of its front
+    (``z - 2r``) = ``occluded``, otherwise ``present``. A ball not wholly
+    in the image is ``out_of_view``, a disk with too little depth
+    ``unknown``.
+    """
+    proj = project(center, radius, K)
+    if proj is None:
+        return VIEW_OUT
+    (u, v), r_px = proj
+    h, w = depth_m.shape
+    if u - r_px < 0 or v - r_px < 0 or u + r_px >= w or v + r_px >= h:
+        return VIEW_OUT
+    rd = max(VIEW_DISK_FRAC * r_px, 1.0)
+    x0, x1 = int(np.floor(u - rd)), int(np.ceil(u + rd)) + 1
+    y0, y1 = int(np.floor(v - rd)), int(np.ceil(v + rd)) + 1
+    ys, xs = np.mgrid[y0:y1, x0:x1]
+    disk = (xs - u) ** 2 + (ys - v) ** 2 <= rd * rd
+    z = depth_m[y0:y1, x0:x1][disk]
+    valid = z[z > 0.0]
+    if valid.size < max(1, MIN_VALID_FRAC * z.size):
+        return VIEW_UNKNOWN
+    z_med = float(np.median(valid))
+    z_c = float(center[2])
+    if z_med > z_c + radius:
+        return VIEW_EMPTY
+    if z_med < z_c - 2.0 * radius:
+        return VIEW_OCCLUDED
+    return VIEW_PRESENT

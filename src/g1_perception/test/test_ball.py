@@ -205,4 +205,6 @@ def test_map_names_replace_numbers_in_log_and_image():
     text = format_balls(balls, ['ball_3', '-'])
     assert text.startswith('ball_3: 1.0') and ', 2: 2.0' in text
     rgb = np.zeros((H, W, 3), np.uint8)
-    assert draw_balls(rgb, balls, names=['ball_3', 'new']).any()
+    assert draw_balls(
+        rgb, balls, names=['ball_3', 'new'], marks=[((50.0, 60.0), 9.0, 'ball_1 empty')]
+    )[60, 59:62].any()

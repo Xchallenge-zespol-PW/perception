@@ -80,3 +80,80 @@ def test_older_stamp_resets_and_reset_restarts_ids():
     assert m.known() == [] and m.nearest_known(A) is None
     with pytest.raises(ValueError):
         m.update([A], [], 3.0)
+
+
+K = np.array([[615.0, 0.0, 320.0], [0.0, 615.0, 240.0], [0.0, 0.0, 1.0]])
+C = np.array([0.1, 0.05, 1.5])  # ball centre in the camera frame
+
+
+def _depth(value):
+    return np.full((480, 640), value, np.float32)
+
+
+def _ball_depth():
+    from test_ball import _render_sphere  # noqa: PLC0415
+    _, depth = _render_sphere(C, R, background=3.0)
+    return depth
+
+
+def test_view_state():
+    from g1_perception.core.ball_map import (
+        VIEW_EMPTY, VIEW_OCCLUDED, VIEW_OUT, VIEW_PRESENT, VIEW_UNKNOWN,
+        project, view_state,
+    )
+    assert view_state(C, R, _ball_depth(), K) == VIEW_PRESENT
+    assert view_state(C, R, _depth(3.0), K) == VIEW_EMPTY
+    assert view_state(C, R, _depth(1.0), K) == VIEW_OCCLUDED
+    assert view_state(C, R, _depth(0.0), K) == VIEW_UNKNOWN
+    assert view_state(np.array([2.0, 0.0, 1.5]), R, _depth(3.0), K) == VIEW_OUT
+    assert view_state(np.array([0.0, 0.0, -1.0]), R, _depth(3.0), K) == VIEW_OUT
+    (u, v), r_px = project(C, R, K)
+    assert (u, v) == pytest.approx((361.0, 260.5)) and r_px == pytest.approx(615 * R / 1.5)
+
+
+def _known_map():
+    m = BallMap()
+    _feed(m, [[A, B]] * CONFIRM_FRAMES)
+    return m
+
+
+def test_ball_leaves_the_map_after_its_place_is_seen_empty():
+    from g1_perception.core.ball_map import EMPTY_FRAMES, VIEW_EMPTY
+    m = _known_map()
+    removed = []
+    for k in range(20):
+        t = 1.0 + k / 15
+        ids, _ = m.update([B], [R], t)
+        assert ids == [2]
+        removed += m.check_views({1: VIEW_EMPTY}, t)
+        if removed:
+            break
+    assert [b.ball_id for b in removed] == [1]
+    assert k + 1 >= max(EMPTY_FRAMES, 15)
+    assert [b.ball_id for b in m.known()] == [2]
+    # Put back: a new name, ids are never reused.
+    out = _feed(m, [[A, B]] * CONFIRM_FRAMES, t0=3.0)
+    assert out[-1][0] == [3, 2]
+
+
+def test_present_seen_or_a_long_gap_cancel_the_removal():
+    from g1_perception.core.ball_map import (
+        EMPTY_TIMEOUT_S, VIEW_EMPTY, VIEW_OCCLUDED, VIEW_OUT, VIEW_PRESENT,
+    )
+    m = _known_map()
+    t = 1.0
+    for view in [VIEW_EMPTY] * 10 + [VIEW_PRESENT] + [VIEW_EMPTY] * 10:
+        assert m.check_views({1: view}, t) == []
+        t += 1 / 15
+    assert m.empty_for(1, t) == pytest.approx(10 / 15, abs=0.01)
+    # Occluded / out of view frames neither count nor cancel...
+    for view in [VIEW_OCCLUDED, VIEW_OUT] * 3:
+        assert m.check_views({1: view}, t) == []
+        t += 1 / 15
+    assert [b.ball_id for b in m.check_views({1: VIEW_EMPTY}, t)] == [1]
+    # ...but a gap longer than the timeout restarts the count.
+    m2 = _known_map()
+    m2.check_views({1: VIEW_EMPTY}, 1.0)
+    m2.check_views({1: VIEW_EMPTY}, 1.0 + EMPTY_TIMEOUT_S + 0.5)
+    assert m2.empty_for(1, 2.6) == pytest.approx(0.1)  # restarted at 2.5
+    assert len(m2.known()) == 2
