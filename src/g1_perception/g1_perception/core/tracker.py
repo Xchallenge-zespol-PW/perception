@@ -126,7 +126,9 @@ class CubeTracker:
         Match framed detections to tracks and return active tracked cubes.
 
         Only observations with a pose participate in matching. Unmatched
-        observations spawn new tracks. Returned list is sorted by track id.
+        trusted observations spawn new tracks; an untrusted one
+        (``pose_trusted`` False) only refreshes the track it matches.
+        Returned list is sorted by track id.
         ``stamp`` (frame time, s) is required in time mode; a stamp older
         than the previous one resets all tracks (bag ``--loop``).
         """
@@ -156,22 +158,25 @@ class CubeTracker:
             track.missed = 0
             track.last_seen = now
             track.last_detection = obs.detection
-            track.last_pose = obs.pose
-            track.last_position = np.asarray(
-                obs.pose.position, dtype=np.float64
-            ).copy()
+            # An untrusted pose keeps the track alive and votes its colour,
+            # but neither moves it nor enters its pose median.
+            if obs.pose_trusted:
+                track.last_pose = obs.pose
+                track.last_position = np.asarray(
+                    obs.pose.position, dtype=np.float64
+                ).copy()
             self._voter.update([
                 SlotResult(
                     slot=tid,
                     label=obs.label,
                     score=obs.score,
                     detection=obs.detection,
-                    pose=obs.pose,
+                    pose=obs.pose if obs.pose_trusted else None,
                 )
             ], stamp)
 
         for obs_i, obs in enumerate(observations):
-            if obs_i in matched_obs:
+            if obs_i in matched_obs or not obs.pose_trusted:
                 continue
             tid = self._next_id
             self._next_id += 1

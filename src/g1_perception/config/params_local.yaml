@@ -38,6 +38,12 @@ perception_node:
     min_above_ratio: 0.5
     footprint_min_m: 0.0
     footprint_max_m: 0.0
+    # Pose update gates (rois_mode none): a cut-off / hidden cube, or every cube
+    # while the camera turns fast, keeps its track and colour votes but not
+    # the pose of that frame. 0 disables each.
+    pose_border_px: 3                 # mask within this of the image edge = cut off
+    min_visible_ratio: 0.45           # mask area / cube face at its depth; whole cubes 0.47..1.7 (p1 0.61)
+    max_camera_rot_deg_s: 20.0        # camera rotation in target_frame between frames
 
     # Multi-frame voting
     vote_window: 10

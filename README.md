@@ -68,7 +68,8 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 │   │   │   ├── debug_vis.py
 │   │   │   ├── geometry.py
 │   │   │   ├── apriltag.py        # AprilTag: aruco + IPPE
-│   │   │   └── tf_chain.py        # TF z /tf w bagu (offline)
+│   │   │   ├── tf_chain.py        # TF z /tf w bagu (offline)
+│   │   │   └── visibility.py      # bramki aktualizacji pozy (ucięta / zasłonięta kostka, obrót kamery)
 │   │   ├── node_config.py
 │   │   ├── ros_conversions.py
 │   │   ├── perception_node.py     # entry point: perception_node
@@ -263,7 +264,17 @@ Tylko w `rois_mode=none`. Logika czyta wszystkie ramki względem `pelvis`, a st�
 
 Ramki startowe wiszą pod `start_frame`, bo logika czyta start przy każdym sprawdzeniu linii: na robocie to stopa (stoi w miejscu, gdy miednica się kołysze; bez zależności od odometrii). Bez TF `start_frame ← target_frame` układ nie jest zamrażany (warning w logu).
 
-**Bieżące pozy**: `/tf` `<target_frame> → <cube>`, stempel obrazu, tylko dla kostek widzianych w tej klatce. Nazwa trzyma się swojego tracka także wtedy, gdy kostka wyjedzie z linii. Gdy track zniknie (dłoń zasłoni kostkę, kamera obróci się z pasem) albo zagłosuje drugi kolor, nazwę przejmuje nowy track, którego współrzędna wzdłuż `slot_axis` jest w `reid_gate_m` od startowej: pchnięcie idzie w poprzek kolumny, a sąsiednia kostka jest 6 cm dalej. Log: `cube_N found again as track …`. Gdy stempel się cofnie (bag `--loop`), tracker numeruje tracki od nowa, więc każda nazwa zapomina swój track i jest odnajdywana po pozycji.
+**Bieżące pozy**: `/tf` `<target_frame> → <cube>` co `publish_rate_hz` dla każdej kostki układu, ze stemplem bieżącego czasu; kostka poza kadrem zostaje w ostatniej widzianej pozie. Nazwa trzyma się swojego tracka także wtedy, gdy kostka wyjedzie z linii. Gdy track zniknie (dłoń zasłoni kostkę, kamera obróci się z pasem) albo zagłosuje drugi kolor, nazwę przejmuje nowy track, którego współrzędna wzdłuż `slot_axis` jest w `reid_gate_m` od startowej: pchnięcie idzie w poprzek kolumny, a sąsiednia kostka jest 6 cm dalej. Log: `cube_N found again as track …`. Gdy stempel się cofnie (bag `--loop`), tracker numeruje tracki od nowa, więc każda nazwa zapomina swój track i jest odnajdywana po pozycji.
+
+**Bramki aktualizacji pozy** (tylko `rois_mode=none`): gdy kostka jest ucięta lub zasłonięta, albo gdy kamera szybko się obraca, klatka nie zmienia pozy kostki. Track dalej żyje (nie znika, nie dostaje nowego numeru) i głosuje kolor, ale pozycja z tej klatki nie trafia do mediany, więc `<cube>` trzyma ostatnią dobrą pozę. Taka klatka nie zakłada też nowego tracka. Liczniki w logu `perception stats`: `hidden_poses` (kostki), `turning_frames` (klatki).
+
+| Parametr | Na robocie | Co |
+|----------|-----------|----|
+| `pose_border_px` | 3 | maska bliżej krawędzi obrazu niż tyle px = kostka ucięta |
+| `min_visible_ratio` | 0.45 | pole maski / ściana kostki w jej odległości. Całe kostki z bagów 11.2026 (model v4, 1529 detekcji): 0.47–1.7, p1 0.61, mediana 0.91 (zależy od kąta patrzenia); 0.45 łapie kostki zasłonięte mniej więcej w połowie i bardziej |
+| `max_camera_rot_deg_s` | 20 | obrót kamery w `target_frame` między kolejnymi klatkami (z TF). Do dostrojenia na bagach z `/tf` (`record_cubes.sh` nagrywa go od 11.2026) |
+
+`0` wyłącza daną bramkę.
 
 **`~/reset`** (`std_srvs/Trigger`, `/perception_node/reset`): zapomina układ i tracki. Wywołaj przed każdą kolejną próbą (kolory są losowane przed każdą); nowy układ dostaje nowe ramki startowe i nową wiadomość z kolorami.
 
@@ -597,7 +608,7 @@ Import `ultralytics` tylko wewnątrz `YoloSegSegmenter` (opcjonalna zależność
 - `/camera/camera/color/image_raw` (`rgb8`)
 - `/camera/camera/aligned_depth_to_color/image_raw` (`16UC1`, mm)
 - `/camera/camera/color/camera_info`
-- `/tf_static`
+- `/tf`, `/tf_static` (`record_cubes.sh`; `/tf` od 11.2026: ruch kamery w bagu, np. do strojenia `max_camera_rot_deg_s`)
 
 **Ułożenie:** `R`/`G`/`X` od lewej (np. `RGGR`).
 

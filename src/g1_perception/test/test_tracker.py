@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -151,3 +153,31 @@ def test_fresh_tracks_disabled_keeps_all():
     tracked = tracker.update([], stamp=0.5)
     assert len(fresh_tracks(tracked, 0.5, 0.0)) == 1
     assert fresh_tracks(tracked, 0.5, 0.3) == []
+
+
+def test_untrusted_pose_keeps_track_but_not_its_position():
+    tracker = CubeTracker(
+        match_dist_m=0.03, max_missed_s=0.5, vote_window=20,
+        vote_window_s=2.0, vote_min_votes=1,
+    )
+    first = tracker.update([_obs(LABEL_RED, 0.0, 0.0)], stamp=0.0)[0].track_id
+    # Camera turning for 1 s: poses 2 cm off, all untrusted.
+    for i in range(1, 11):
+        obs = replace(_obs(LABEL_RED, 0.02, 0.0), pose_trusted=False)
+        tracked = tracker.update([obs], stamp=0.1 * i)
+
+    assert len(tracked) == 1
+    tr = tracked[0]
+    assert tr.track_id == first and tr.missed == 0 and tr.label == LABEL_RED
+    assert tr.pose.position[0] == pytest.approx(0.0)
+    assert tr.n_frames == 11  # colour votes still counted
+
+
+def test_untrusted_observation_does_not_start_a_track():
+    tracker = CubeTracker(
+        match_dist_m=0.03, max_missed=3, vote_window=3, vote_min_frames=1
+    )
+    first = tracker.update([_obs(LABEL_RED, 0.0, 0.0)])[0].track_id
+    far = replace(_obs(LABEL_GREEN, 0.3, 0.0), pose_trusted=False)
+    tracked = tracker.update([_obs(LABEL_RED, 0.0, 0.0), far])
+    assert [t.track_id for t in tracked] == [first]

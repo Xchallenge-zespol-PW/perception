@@ -79,7 +79,9 @@ class SlotResult:
     :data:`CANONICAL_LABELS`. ``score`` is the confidence of the chosen
     detection (0 when nothing was detected). ``detection`` is None for
     ``empty`` slots without a detection; ``pose`` is set only for
-    ``red`` / ``green`` when estimation succeeded.
+    ``red`` / ``green`` when estimation succeeded. ``pose_trusted`` False
+    (cube cut off / hidden, or the camera turning fast) keeps a track alive
+    and votes its colour, but does not update its pose.
     """
 
     slot: int | None
@@ -87,6 +89,7 @@ class SlotResult:
     score: float
     detection: Detection | None
     pose: Pose | None
+    pose_trusted: bool = True
 
 
 class Segmenter(Protocol):
