@@ -204,3 +204,16 @@ def test_built_config_runs_hsv_pipeline(tmp_path: Path):
         Roi(0, 0, 0, 10, 10), Roi(1, 10, 0, 20, 10), Roi(2, 20, 0, 30, 10)
     ]
     assert labels == [LABEL_RED, 'empty', LABEL_GREEN]
+
+
+def test_duplicate_overlap_and_height_tolerance_reach_their_stages():
+    config = build_pipeline_config(_params(rois_mode='none'))
+    assert config['duplicate_overlap'] == 0.5
+    assert build_pipeline_config(
+        _params(duplicate_overlap=0.0)
+    )['duplicate_overlap'] == 0.0
+
+    assert tracker_kwargs(_params())['match_max_dz_m'] is None
+    tk = tracker_kwargs(_params(match_max_dz_m=0.06))
+    assert tk['match_max_dz_m'] == 0.06
+    assert CubeTracker(**tk).match_max_dz_m == 0.06

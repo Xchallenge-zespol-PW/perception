@@ -408,3 +408,79 @@ def test_load_is_noop_for_stage_without_model():
     pipeline = _pipeline([])
     pipeline.load()
     assert pipeline.backend_label is None
+
+
+class MaskSegmenter:
+    """Returns the given detections as they are."""
+
+    def __init__(self, detections: list[Detection]) -> None:
+        self.detections = detections
+
+    def segment(self, frame: Frame) -> list[Detection]:
+        return list(self.detections)
+
+
+class ManyPoseEstimator(RecordingPoseEstimator):
+    """Records the detections it gets at once."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.batches: list[list[str]] = []
+
+    def estimate_many(self, frame: Frame, dets) -> list[Pose | None]:
+        self.batches.append([det.label for det in dets])
+        return [self.estimate(frame, det) for det in dets]
+
+
+def _box_mask(x0: int, x1: int, h: int = 10, w: int = 40) -> np.ndarray:
+    mask = np.zeros((h, w), dtype=bool)
+    mask[:, x0:x1] = True
+    return mask
+
+
+def test_free_mode_drops_a_second_mask_of_the_same_cube():
+    detections = [
+        Detection(None, 'green cube', 0.6, _box_mask(2, 10)),   # inside red
+        Detection(None, 'red cube', 0.9, _box_mask(0, 10)),
+        Detection(None, 'green cube', 0.8, _box_mask(20, 30)),  # other cube
+    ]
+
+    def labels(overlap: float) -> list[str]:
+        pipeline = Pipeline(
+            MaskSegmenter(detections), RecordingPoseEstimator(), [],
+            LABEL_MAP, rois_mode='none', duplicate_overlap=overlap,
+        )
+        return [r.label for r in pipeline.process(_make_frame())]
+
+    assert labels(0.5) == [LABEL_RED, LABEL_GREEN]
+    assert labels(0.0) == [LABEL_GREEN, LABEL_RED, LABEL_GREEN]
+
+
+def test_free_mode_gives_all_detections_to_estimate_many():
+    detections = [
+        Detection(None, 'red cube', 0.9, _box_mask(0, 10)),
+        Detection(None, 'nieznany', 0.7, _box_mask(12, 18)),
+        Detection(None, 'green cube', 0.8, _box_mask(20, 30)),
+    ]
+    estimator = ManyPoseEstimator()
+    pipeline = Pipeline(
+        MaskSegmenter(detections), estimator, [], LABEL_MAP,
+        rois_mode='none', duplicate_overlap=0.5,
+    )
+
+    results = pipeline.process(_make_frame())
+
+    # The uncertain one leaves its mask out of the plane too, but gets no pose.
+    assert estimator.batches == [['red cube', 'nieznany', 'green cube']]
+    assert [r.label for r in results] == [
+        LABEL_RED, LABEL_UNCERTAIN, LABEL_GREEN
+    ]
+    assert [r.pose is not None for r in results] == [True, False, True]
+
+
+def test_duplicate_overlap_out_of_range_raises():
+    with pytest.raises(ValueError, match='duplicate_overlap'):
+        Pipeline(
+            MaskSegmenter([]), RecordingPoseEstimator(), [], LABEL_MAP,
+            rois_mode='none', duplicate_overlap=1.5,
+        )

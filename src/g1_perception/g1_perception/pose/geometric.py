@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ from g1_perception.core.geometry import (
     points_above_plane,
     roi_from_mask,
     table_plane_around,
+    table_plane_around_rois,
 )
 from g1_perception.core.types import Detection, Frame, Pose
 from g1_perception.pipeline import register
@@ -36,6 +38,15 @@ class GeometricPoseEstimator:
     at least ``min_above_ratio`` of them must be kept, and their rectangle
     on the table must be ``footprint_min`` .. ``footprint_max`` (m).
     ``min_height <= 0`` turns off the height part, ``0`` a footprint bound.
+
+    :meth:`estimate_many` places all detections of a frame on one table
+    plane, fitted around all of them with every mask cut out. The cube
+    height comes from the plane alone (its centre is ``size / 2`` above
+    it), and :meth:`estimate` leaves out only the cube's own mask: in a
+    column of cubes, whose gaps the front cubes hide from the camera, the
+    window of a middle cube is up to half its neighbours, whose tops lie
+    in one plane ``size`` above the table, and RANSAC could take that
+    plane, putting the cube up to ``size`` too high.
     """
 
     def __init__(
@@ -72,21 +83,11 @@ class GeometricPoseEstimator:
 
     def estimate(self, frame: Frame, det: Detection) -> Pose | None:
         """Return geometric cube pose, or None if estimation fails."""
-        if det.slot is not None and det.slot in self._roi_by_slot:
-            roi = self._roi_by_slot[det.slot]
-        else:
-            try:
-                roi = roi_from_mask(det.mask)
-            except ValueError:
-                return None
+        roi = self._roi(det)
+        if roi is None:
+            return None
 
-        points = deproject(
-            det.mask,
-            frame.depth_m,
-            frame.K,
-            z_min=self.z_min,
-            z_max=self.z_max,
-        )
+        points = self._mask_points(frame, det)
         if points.shape[0] < 4:
             return None
 
@@ -101,11 +102,86 @@ class GeometricPoseEstimator:
                 z_max=self.z_max,
                 threshold=self.ransac_threshold,
             )
-            plane = (n, d)
-            points = self._cube_points(points, plane)
-            if points is None:
+        except ValueError:
+            return None
+        return self._pose_on(points, (n, d))
+
+    def estimate_many(
+        self,
+        frame: Frame,
+        dets: Sequence[Detection],
+    ) -> list[Pose | None]:
+        """
+        Return the pose of every detection of ``frame`` on one table plane.
+
+        The plane is fitted around all detections (each ROI expanded by
+        ``margin``) without the pixels of any of their masks, so neither a
+        neighbouring cube nor the cube itself enters it, and a cube whose
+        own surroundings have no depth still gets the table of the others.
+        A pose is None where :meth:`estimate` would fail on that plane, and
+        every pose is None when no plane can be fitted.
+        """
+        rois = [self._roi(det) for det in dets]
+        known = [roi for roi in rois if roi is not None]
+        if not known:
+            return [None] * len(dets)
+
+        exclude = np.zeros(frame.depth_m.shape[:2], dtype=bool)
+        for det in dets:
+            exclude |= det.mask
+        try:
+            n, d, _n_inliers = table_plane_around_rois(
+                known,
+                exclude,
+                frame.depth_m,
+                frame.K,
+                self.margin,
+                z_min=self.z_min,
+                z_max=self.z_max,
+                threshold=self.ransac_threshold,
+            )
+        except ValueError:
+            return [None] * len(dets)
+
+        poses: list[Pose | None] = []
+        for det, roi in zip(dets, rois):
+            points = self._mask_points(frame, det)
+            if roi is None or points.shape[0] < 4:
+                poses.append(None)
+                continue
+            poses.append(self._pose_on(points, (n, d)))
+        return poses
+
+    def _roi(self, det: Detection) -> Roi | None:
+        """Return the ROI of the slot, or the mask's box; None if empty."""
+        if det.slot is not None and det.slot in self._roi_by_slot:
+            return self._roi_by_slot[det.slot]
+        try:
+            return roi_from_mask(det.mask)
+        except ValueError:
+            return None
+
+    def _mask_points(self, frame: Frame, det: Detection) -> NDArray[np.float64]:
+        """Return the 3D points of the detection mask with valid depth."""
+        return deproject(
+            det.mask,
+            frame.depth_m,
+            frame.K,
+            z_min=self.z_min,
+            z_max=self.z_max,
+        )
+
+    def _pose_on(
+        self,
+        points: NDArray[np.float64],
+        plane: Plane,
+    ) -> Pose | None:
+        """Return the cube pose of mask points on the table plane, or None."""
+        try:
+            cube_points = self._cube_points(points, plane)
+            if cube_points is None:
                 return None
-            return cube_pose_on_table(points, plane, size=self.size)
+            return cube_pose_on_table(cube_points, plane, size=self.size)
         except ValueError:
             return None
 

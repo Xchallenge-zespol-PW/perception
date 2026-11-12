@@ -70,9 +70,10 @@ def test_two_close_cubes_keep_separate_ids():
     tracker = CubeTracker(
         match_dist_m=0.03, max_missed=2, vote_window=5, vote_min_frames=1
     )
-    # 2.5 cm apart — under typical spacing but each stays nearer to itself
+    # 3.5 cm apart — under typical spacing but each stays nearer to itself
+    # (closer than match_dist_m, two masks of one frame are one cube).
     a = (LABEL_RED, 0.0, 0.0)
-    b = (LABEL_GREEN, 0.025, 0.0)
+    b = (LABEL_GREEN, 0.035, 0.0)
     ids_a = ids_b = None
     for _ in range(5):
         tracked = tracker.update([_obs(*a), _obs(*b)])
@@ -84,7 +85,7 @@ def test_two_close_cubes_keep_separate_ids():
         }
         assert len(tracked) == 2
         if ids_a is None:
-            ids_a = by_y.get(0.0) or by_y.get(0.025)
+            ids_a = by_y.get(0.0) or by_y.get(0.035)
             ids_b = [i for i in by_y.values() if i != ids_a][0]
         else:
             assert set(by_y.values()) == {ids_a, ids_b}
@@ -181,3 +182,74 @@ def test_untrusted_observation_does_not_start_a_track():
     far = replace(_obs(LABEL_GREEN, 0.3, 0.0), pose_trusted=False)
     tracked = tracker.update([_obs(LABEL_RED, 0.0, 0.0), far])
     assert [t.track_id for t in tracked] == [first]
+
+
+def _obs_at(
+    label: str, x: float, y: float, z: float = 0.5, score: float = 0.9,
+) -> SlotResult:
+    return SlotResult(
+        slot=None, label=label, score=score, detection=None,
+        pose=_pose(x, y, z),
+    )
+
+
+def test_second_mask_of_a_cube_starts_no_track():
+    tracker = CubeTracker(
+        match_dist_m=0.03, max_missed=3, vote_window=3, vote_min_frames=1
+    )
+    for _ in range(4):
+        # One cube seen as both colours, 1 cm apart, from the first frame on.
+        tracked = tracker.update([
+            _obs_at(LABEL_GREEN, 0.01, 0.0, score=0.6),
+            _obs_at(LABEL_RED, 0.0, 0.0, score=0.9),
+        ])
+        assert [t.track_id for t in tracked] == [1]
+        assert tracked[0].label == LABEL_RED  # the higher score started it
+
+
+def test_height_jump_stays_on_its_track():
+    # Middle cube of a column: one frame fits the table plane to the tops
+    # of its neighbours and puts it 5 cm too high.
+    heights = [0.5, 0.5, 0.5, 0.55, 0.5, 0.5, 0.5]
+
+    tracker = CubeTracker(
+        match_dist_m=0.03, match_max_dz_m=0.06, max_missed_s=1.0,
+        vote_window=100, vote_window_s=2.0, vote_min_votes=1,
+    )
+    for i, z in enumerate(heights):
+        tracked = tracker.update([_obs_at(LABEL_RED, 0.0, 0.0, z)], 0.1 * i)
+    assert [t.track_id for t in tracked] == [1]
+    assert tracked[0].pose.position[2] == pytest.approx(0.5)  # median
+
+    # Matching in 3D, the same jump split the cube into two tracks.
+    tracker = CubeTracker(
+        match_dist_m=0.03, max_missed_s=1.0,
+        vote_window=100, vote_window_s=2.0, vote_min_votes=1,
+    )
+    for i, z in enumerate(heights):
+        tracked = tracker.update([_obs_at(LABEL_RED, 0.0, 0.0, z)], 0.1 * i)
+    assert len(tracked) == 2
+
+
+def test_planar_matching_keeps_neighbours_apart():
+    tracker = CubeTracker(
+        match_dist_m=0.03, match_max_dz_m=0.06, max_missed=3,
+        vote_window=3, vote_min_frames=1,
+    )
+    rng = np.random.default_rng(1)
+    ids = None
+    for _ in range(10):
+        # Cubes 6 cm apart, heights off by up to 4 cm.
+        tracked = tracker.update([
+            _obs_at(LABEL_RED, 0.40, 0.0, 0.5 + float(rng.uniform(-0.04, 0.04))),
+            _obs_at(LABEL_GREEN, 0.46, 0.0, 0.5 + float(rng.uniform(-0.04, 0.04))),
+        ])
+        by_x = {round(float(t.pose.position[0]), 2): t.track_id for t in tracked}
+        assert len(tracked) == 2 and set(by_x) == {0.40, 0.46}
+        ids = ids or by_x
+        assert by_x == ids
+
+
+def test_match_max_dz_must_be_positive():
+    with pytest.raises(ValueError, match='match_max_dz_m'):
+        CubeTracker(match_max_dz_m=0.0)

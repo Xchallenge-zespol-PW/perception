@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import cv2
@@ -163,17 +164,50 @@ def table_plane_around(
     Builds a rectangle expanded by ``margin`` pixels, removes object pixels,
     deprojects, and runs :func:`fit_plane_ransac`.
     """
-    h, w = depth_m.shape[:2]
-    region = np.zeros((h, w), dtype=bool)
-    y0 = max(int(roi.y0) - int(margin), 0)
-    x0 = max(int(roi.x0) - int(margin), 0)
-    y1 = min(int(roi.y1) + int(margin), h)
-    x1 = min(int(roi.x1) + int(margin), w)
-    region[y0:y1, x0:x1] = True
-    region &= ~mask
-
+    region = plane_region([roi], mask, margin)
     points = deproject(region, depth_m, K, z_min=z_min, z_max=z_max)
     return fit_plane_ransac(points, **ransac_kwargs)
+
+
+def table_plane_around_rois(
+    rois: Sequence[Roi],
+    exclude: NDArray[np.bool_],
+    depth_m: NDArray[np.float32],
+    K: NDArray[np.float64],
+    margin: int,
+    *,
+    z_min: float | None = None,
+    z_max: float | None = None,
+    **ransac_kwargs: Any,
+) -> tuple[NDArray[np.float64], float, int]:
+    """
+    Estimate one table plane from depth around several ROIs.
+
+    The pixels of every ROI expanded by ``margin`` pixels, without the
+    ``exclude`` pixels (the masks of all objects of the frame), go into one
+    :func:`fit_plane_ransac`.
+    """
+    region = plane_region(rois, exclude, margin)
+    points = deproject(region, depth_m, K, z_min=z_min, z_max=z_max)
+    return fit_plane_ransac(points, **ransac_kwargs)
+
+
+def plane_region(
+    rois: Sequence[Roi],
+    exclude: NDArray[np.bool_],
+    margin: int,
+) -> NDArray[np.bool_]:
+    """Return the pixels of ``rois`` expanded by ``margin``, minus ``exclude``."""
+    h, w = exclude.shape[:2]
+    region = np.zeros((h, w), dtype=bool)
+    for roi in rois:
+        y0 = max(int(roi.y0) - int(margin), 0)
+        x0 = max(int(roi.x0) - int(margin), 0)
+        y1 = min(int(roi.y1) + int(margin), h)
+        x1 = min(int(roi.x1) + int(margin), w)
+        region[y0:y1, x0:x1] = True
+    region &= ~exclude
+    return region
 
 
 def cube_pose_on_table(

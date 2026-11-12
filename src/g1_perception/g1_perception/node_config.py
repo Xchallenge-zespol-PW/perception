@@ -32,6 +32,7 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'rois_path': '',
     'hsv_path': '',
     'labels_path': '',
+    'duplicate_overlap': 0.5,
     'cube_size_m': 0.05,
     'margin_px': 20,
     'z_min_m': 0.1,
@@ -57,6 +58,7 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'max_missed_s': 0.0,
     'fresh_s': 0.0,
     'match_dist_m': 0.03,
+    'match_max_dz_m': 0.0,
     'max_missed': 5,
     'slot_axis': 'y',
     'expected_count': 4,
@@ -119,6 +121,7 @@ def build_pipeline_config(params: Mapping[str, Any]) -> dict[str, Any]:
 
     config: dict[str, Any] = {
         'rois_mode': str(params.get('rois_mode', ROIS_MODE_IMAGE)),
+        'duplicate_overlap': float(params.get('duplicate_overlap', 0.0)),
         'segmenter': {
             'name': seg_name,
             'params': stage_params(get_registered(seg_name), seg_candidates),
@@ -155,11 +158,17 @@ def voter_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def tracker_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
-    """Return :class:`CubeTracker` kwargs from flat node parameters."""
+    """
+    Return :class:`CubeTracker` kwargs from flat node parameters.
+
+    ``match_max_dz_m <= 0`` matches by 3D distance.
+    """
     vk = voter_kwargs(params)
     max_missed_s = float(params.get('max_missed_s', 0.0))
+    match_max_dz_m = float(params.get('match_max_dz_m', 0.0))
     return {
         'match_dist_m': float(params['match_dist_m']),
+        'match_max_dz_m': match_max_dz_m if match_max_dz_m > 0.0 else None,
         'max_missed': int(params['max_missed']),
         'max_missed_s': max_missed_s if max_missed_s > 0.0 else None,
         'vote_window': vk['window'],

@@ -302,3 +302,104 @@ def test_geometric_rejects_oversized_footprint():
         rois=[roi], size=0.10, margin=15, footprint_max=0.08,
     )
     assert est.estimate(frame, det) is None
+
+
+def render_cube_tops(
+    *,
+    K: np.ndarray,
+    centers_xy: list[tuple[float, float]],
+    height: int = 240,
+    width: int = 320,
+    z_table: float = 1.0,
+    size: float = 0.05,
+) -> tuple[Frame, list[Detection], list[np.ndarray]]:
+    """
+    Render axis-aligned cube tops on a fronto-parallel table.
+
+    Returns ``(frame, detections, true centres)`` in the camera frame.
+    """
+    fx, fy = float(K[0, 0]), float(K[1, 1])
+    cx, cy = float(K[0, 2]), float(K[1, 2])
+    z_top = z_table - size
+    half = size / 2.0
+    depth = np.full((height, width), np.float32(z_table), dtype=np.float32)
+    detections, centers = [], []
+    for x, y in centers_xy:
+        corners = np.array([
+            [x - half, y - half], [x + half, y - half],
+            [x + half, y + half], [x - half, y + half],
+        ])
+        pts2 = np.column_stack((
+            fx * corners[:, 0] / z_top + cx, fy * corners[:, 1] / z_top + cy,
+        ))
+        mask_u8 = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillConvexPoly(mask_u8, np.round(pts2).astype(np.int32), 1)
+        mask = mask_u8.astype(bool)
+        depth[mask] = np.float32(z_top)
+        detections.append(Detection(slot=None, label='zielony', score=0.9, mask=mask))
+        centers.append(np.array([x, y, z_table - half]))
+    frame = Frame(
+        rgb=np.zeros((height, width, 3), dtype=np.uint8),
+        depth_m=depth, K=K, stamp=0.0,
+    )
+    return frame, detections, centers
+
+
+def test_estimate_many_leaves_the_neighbours_out_of_the_table_plane():
+    # 3 x 3 cubes 1 cm apart: the window of the middle one is mostly the
+    # tops of its neighbours, one plane 5 cm above the table.
+    K = _make_K()
+    grid = [(0.06 * i, 0.06 * j) for j in (-1, 0, 1) for i in (-1, 0, 1)]
+    frame, dets, centers = render_cube_tops(K=K, centers_xy=grid)
+    # Shape checks off, as in params_robot.yaml, and on (the defaults).
+    robot = GeometricPoseEstimator(
+        size=0.05, margin=20, min_height=0.0, footprint_min=0.0,
+        footprint_max=0.0,
+    )
+    checked = GeometricPoseEstimator(size=0.05, margin=20)
+
+    # Alone, the middle cube sits on the tops of its neighbours: 5 cm too
+    # high without the height check, dropped with it.
+    alone = robot.estimate(frame, dets[4])
+    assert alone is not None
+    assert abs(alone.position[2] - centers[4][2]) > 0.04
+    assert checked.estimate(frame, dets[4]) is None
+
+    for est in (robot, checked):
+        poses = est.estimate_many(frame, dets)
+        for pose, center in zip(poses, centers):
+            assert pose is not None
+            assert np.linalg.norm(pose.position - center) < 0.005
+
+
+def test_estimate_many_gives_the_table_of_the_others_to_a_cube_without_it():
+    K = _make_K()
+    frame, dets, centers = render_cube_tops(
+        K=K, centers_xy=[(-0.1, 0.0), (0.1, 0.0)]
+    )
+    # No depth of the table around the first cube (white sheet, IR glare).
+    depth = frame.depth_m.copy()
+    ys, xs = np.where(dets[0].mask)
+    around = np.zeros(depth.shape, dtype=bool)
+    around[ys.min() - 25:ys.max() + 26, xs.min() - 25:xs.max() + 26] = True
+    depth[around & ~dets[0].mask] = 0.0
+    frame = Frame(rgb=frame.rgb, depth_m=depth, K=K, stamp=0.0)
+    est = GeometricPoseEstimator(size=0.05, margin=20)
+
+    assert est.estimate(frame, dets[0]) is None
+
+    poses = est.estimate_many(frame, dets)
+    for pose, center in zip(poses, centers):
+        assert pose is not None
+        assert np.linalg.norm(pose.position - center) < 0.005
+
+
+def test_estimate_many_without_any_table_gives_no_poses():
+    K = _make_K()
+    frame, dets, _centers = render_cube_tops(K=K, centers_xy=[(0.0, 0.0)])
+    depth = np.where(dets[0].mask, frame.depth_m, np.float32(0.0))
+    frame = Frame(rgb=frame.rgb, depth_m=depth.astype(np.float32), K=K, stamp=0.0)
+    est = GeometricPoseEstimator(size=0.05, margin=20)
+
+    assert est.estimate_many(frame, dets) == [None]
+    assert est.estimate_many(frame, []) == []

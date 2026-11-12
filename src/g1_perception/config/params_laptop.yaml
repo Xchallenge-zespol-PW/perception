@@ -34,8 +34,9 @@ perception_node:
     rois_path: ""
     hsv_path: ""
     labels_path: ""
+    duplicate_overlap: 0.5        # mask over half on a higher-score one = same cube, dropped
 
-    # Pose estimation
+    # Pose estimation (one table plane per frame, all masks cut out)
     cube_size_m: 0.05
     margin_px: 20
     z_min_m: 0.1
@@ -66,7 +67,8 @@ perception_node:
     vote_window: 100
     vote_min_ratio: 0.7
     vote_min_frames: 0
-    match_dist_m: 0.03
+    match_dist_m: 0.03                # in x, y with match_max_dz_m (0 = in 3D)
+    match_max_dz_m: 0.06              # a wrong height in one frame starts no new track
     max_missed_s: 1.0
     # Slots and the start layout count only tracks seen within fresh_s:
     # a split track (new id after a jump) stays alive max_missed_s.

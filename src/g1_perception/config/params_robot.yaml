@@ -41,8 +41,14 @@ perception_node:
     rois_path: ""
     hsv_path: ""
     labels_path: ""
+    # A mask lying by more than this (of the smaller mask) on a higher-score
+    # one is the same cube seen twice (both colours, whole cube and its top):
+    # dropped, whatever its class. 0 keeps every detection.
+    duplicate_overlap: 0.5
 
-    # Pose estimation
+    # Pose estimation. One table plane per frame, from margin_px around every
+    # detection with all masks cut out: a middle cube of the column no longer
+    # fits it to its neighbours' tops (5 cm above the table).
     cube_size_m: 0.05
     margin_px: 20
     z_min_m: 0.1
@@ -73,7 +79,12 @@ perception_node:
     vote_window: 100
     vote_min_ratio: 0.7
     vote_min_frames: 0
+    # A detection joins a track within match_dist_m in x, y and match_max_dz_m
+    # in height (0 = match_dist_m in 3D): a height that came out wrong in one
+    # frame starts no new track, and the median drops it. A detection that close
+    # to a track taken in the same frame is a second mask of that cube.
     match_dist_m: 0.03
+    match_max_dz_m: 0.06
     max_missed_s: 1.0
     # Slots and the start layout count only tracks seen within fresh_s:
     # a split track (new id after a jump) stays alive max_missed_s.
