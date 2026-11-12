@@ -58,6 +58,7 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 │   ├── launch/balls.launch.py       # config:=balls.yaml (etap 2)
 ├── deploy/                        # requirements-robot.txt, constraints.txt (numpy<2)
 ├── docs/robot.md                  # Jetson Orin NX / Humble / TensorRT GPU + ONNX CPU
+├── docs/balls.md                  # interfejs ball_node dla planera (etap 2)
 │   ├── g1_perception/
 │   │   ├── core/
 │   │   │   ├── types.py
@@ -318,7 +319,7 @@ Tagi: druk matowy, płasko, z białą ramką wokół; zmierz bok czarnego kwadra
 
 ## Węzeł piłek (`ball_node`, etap 2)
 
-Mapa piłek w `odom` ze stałymi nazwami `ball_<N>`, z której znikają zabrane piłki (kroki 3–4), i piłki z bieżącej klatki (kroki 1–2). Model ten sam co dla kostek (v4, klasa `red ball`).
+Mapa piłek w `odom` ze stałymi nazwami `ball_<N>`, z której znikają zabrane piłki (kroki 3–4), i piłki z bieżącej klatki (kroki 1–2). **Interfejs dla planera / chwytania (topici, cykl życia piłki, przykład kodu): [docs/balls.md](docs/balls.md).** Model ten sam co dla kostek (v4, klasa `red ball`).
 
 ```bash
 ros2 launch g1_perception balls.launch.py                  # robot: /camera/d435, odom, TensorRT
@@ -331,6 +332,7 @@ ros2 launch g1_perception balls.launch.py camera_ns:=/camera/camera world_frame:
 |---------|------|
 | TF `ball_<N>` | każda piłka mapy w `world_frame` (`odom`), co `publish_rate_hz` (5 Hz), stempel = teraz, pozycja = mediana 30 ostatnich obserwacji. Nazwa stała przez cały przejazd (numery w kolejności wejścia do mapy), także gdy piłka jest poza kadrem lub zasłonięta. Zabrana piłka przestaje być publikowana (jej ostatni TF zostaje w buforze ze starzejącym się stemplem; aktualna lista = `/perception/balls`) |
 | `/perception/balls` (`vision_msgs/Detection3DArray`) | to samo co TF `ball_<N>`: `id` = nazwa, `class_id` = `red ball`, `bbox.size` = zmierzona średnica |
+| `/perception/balls/summary` (`std_msgs/String`) | to samo jako JSON: `[{"name": "ball_1", "x": …, "y": …, "z": …, "diameter_m": …}]` |
 | `~/reset` (`std_srvs/Trigger`) | czyści mapę, numery od 1 (`ros2 service call /ball_node/reset std_srvs/srv/Trigger`) |
 | TF `ball_seen_<K>` | piłki z ostatniej klatki w `world_frame`, stempel klatki; `K` = kolejność od najbliższej, **nie** stały numer. Piłka poza kadrem zostawia stary TF (wiek = stempel) |
 | `/perception/balls/seen` (`geometry_msgs/PoseArray`) | środki piłek z klatki w tej samej kolejności |

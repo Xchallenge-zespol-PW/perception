@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
@@ -29,7 +30,7 @@ from rclpy.node import Node  # noqa: E402
 from rclpy.qos import qos_profile_sensor_data  # noqa: E402
 from rclpy.time import Time  # noqa: E402
 from sensor_msgs.msg import CameraInfo, Image  # noqa: E402
-from std_msgs.msg import Header  # noqa: E402
+from std_msgs.msg import Header, String  # noqa: E402
 from std_srvs.srv import Trigger  # noqa: E402
 from tf2_ros import (  # noqa: E402
     Buffer,
@@ -57,6 +58,7 @@ from g1_perception.core.ball_map import (  # noqa: E402
     VIEW_SEEN,
     BallMap,
     MappedBall,
+    map_summary,
     project,
     view_state,
 )
@@ -83,6 +85,7 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'camera_info_topic': '/camera/d435/color/camera_info',
     'balls_topic': '/perception/balls',
     'seen_topic': '/perception/balls/seen',
+    'summary_topic': '/perception/balls/summary',
     'debug_image_topic': '/perception/balls/debug_image',
     'world_frame': 'odom',
     'ball_name_prefix': 'ball_',
@@ -129,7 +132,8 @@ class BallNode(Node):
 
     At ``publish_rate_hz`` every ball of the map is published as the TF
     ``ball_<N>`` in ``world_frame`` (stamped now, at its median position)
-    and on ``balls_topic`` (vision_msgs/Detection3DArray, ``id`` = name).
+    and on ``balls_topic`` (vision_msgs/Detection3DArray, ``id`` = name),
+    and as JSON on ``summary_topic`` (std_msgs/String).
     Each frame's balls are also published as TF ``ball_seen_<K>`` (``K`` =
     rank by distance, stamped with the frame) and a PoseArray on
     ``seen_topic``. Without the TF camera -> ``world_frame`` a frame is
@@ -189,6 +193,7 @@ class BallNode(Node):
             Detection3DArray, p['balls_topic'], 10
         )
         self._pub_seen = self.create_publisher(PoseArray, p['seen_topic'], 10)
+        self._pub_summary = self.create_publisher(String, p['summary_topic'], 10)
         self._reset_service = self.create_service(
             Trigger, '~/reset', self._on_reset
         )
@@ -525,6 +530,9 @@ class BallNode(Node):
         self._last_map_tf_ns = now.nanoseconds
         header = Header(stamp=now.to_msg(), frame_id=frame_id)
         self._pub_balls.publish(self._detection_array(balls, header))
+        self._pub_summary.publish(
+            String(data=json.dumps(map_summary(balls, self._prefix)))
+        )
         if not balls:
             return
         transforms = []

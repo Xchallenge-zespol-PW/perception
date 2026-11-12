@@ -165,3 +165,13 @@ def test_residuals_of_known_balls():
     assert sorted(m.last_residuals) == pytest.approx([0.0, 0.01])
     m.update([A * 3], [R], 2.1)  # new tentative ball: no residual
     assert m.last_residuals == []
+
+
+def test_map_summary():
+    from g1_perception.core.ball_map import map_summary
+    m = _known_map()
+    assert map_summary(m.known()) == [
+        {'name': 'ball_1', 'x': 2.0, 'y': 0.5, 'z': 0.6, 'diameter_m': 0.066},
+        {'name': 'ball_2', 'x': 2.0, 'y': 0.8, 'z': 0.6, 'diameter_m': 0.066},
+    ]
+    assert map_summary([], 'p') == []

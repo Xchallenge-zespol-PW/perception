@@ -18,6 +18,7 @@ ball_node:
     # ball_seen_<K>; debug image only while subscribed. ~/reset empties the map.
     balls_topic: /perception/balls
     seen_topic: /perception/balls/seen
+    summary_topic: /perception/balls/summary  # JSON: [{"name", "x", "y", "z", "diameter_m"}]
     debug_image_topic: /perception/balls/debug_image
     ball_name_prefix: ball_
     publish_rate_hz: 5.0

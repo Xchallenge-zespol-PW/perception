@@ -257,6 +257,23 @@ class BallMap:
         return best
 
 
+def map_summary(
+    balls: Sequence[MappedBall],
+    prefix: str = 'ball_',
+) -> list[dict[str, float | str]]:
+    """Return ``[{'name': 'ball_1', 'x': .., 'y': .., 'z': .., 'diameter_m': ..}]``."""
+    return [
+        {
+            'name': f'{prefix}{b.ball_id}',
+            'x': round(float(b.position[0]), 3),
+            'y': round(float(b.position[1]), 3),
+            'z': round(float(b.position[2]), 3),
+            'diameter_m': round(2.0 * b.radius_m, 3),
+        }
+        for b in balls
+    ]
+
+
 def project(
     center: NDArray[np.float64],
     radius: float,
