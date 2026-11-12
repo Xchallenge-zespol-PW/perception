@@ -90,10 +90,12 @@ class BallNode(Node):
     """
     Detect red balls and publish each one seen as TF ``ball_seen_<K>``.
 
-    Step 1 of exercise 2: no tracking or memory yet. Every processed frame
-    publishes the balls it sees (not cut by the image border), nearest
-    first, as ``ball_seen_1..N`` in ``world_frame`` stamped with that frame,
-    and the same centres as a PoseArray on ``balls_topic``. ``K`` is the
+    No tracking or memory yet. Every processed frame publishes the balls
+    it sees whose outline was fitted and whose depth profile is a ball
+    (:attr:`BallObservation.trusted`; a ball hidden too much, a flat red
+    blob or a second mask on one ball is only logged and drawn), nearest
+    first, as ``ball_seen_1..N`` in ``world_frame`` stamped with that
+    frame, and the same centres as a PoseArray on ``balls_topic``. ``K`` is the
     rank by distance in that frame, not a stable id; a ball out of view
     leaves its old frame in TF, whose stamp tells its age. Without the TF
     camera -> ``world_frame`` (or with ``world_frame: ""``) the balls are
@@ -152,6 +154,7 @@ class BallNode(Node):
         self._infer_count = 0
         self._skipped = 0
         self._n_balls = 0
+        self._n_rejected: dict[str, int] = {}
 
         self._stop = threading.Event()
         self._worker = threading.Thread(
@@ -262,7 +265,12 @@ class BallNode(Node):
         with self._stats_lock:
             self._infer_ms_sum += inference_ms
             self._infer_count += 1
-            self._n_balls += len(balls)
+            for b in balls:
+                if b.trusted:
+                    self._n_balls += 1
+                else:
+                    reason = b.reject_reason
+                    self._n_rejected[reason] = self._n_rejected.get(reason, 0) + 1
 
     def _publish(self, balls: list[BallObservation], camera: Header) -> None:
         """Publish TF ``ball_seen_<K>`` and the PoseArray of whole balls."""
@@ -270,7 +278,7 @@ class BallNode(Node):
         if stamp_ns <= self._last_stamp_ns:  # TF_REPEATED_DATA on bag --loop
             return
         self._last_stamp_ns = stamp_ns
-        centres = [b.position for b in balls if not b.cut]
+        centres = [b.position for b in balls if b.trusted]
         frame_id = camera.frame_id
         tf = self._lookup_world(camera)
         if tf is not None:
@@ -345,6 +353,7 @@ class BallNode(Node):
             count, total_ms, n_balls = (
                 self._infer_count, self._infer_ms_sum, self._n_balls
             )
+            rejected, self._n_rejected = self._n_rejected, {}
             self._infer_count = self._n_balls = 0
             self._infer_ms_sum = 0.0
         with self._latest_cv:
@@ -353,6 +362,7 @@ class BallNode(Node):
         self.get_logger().info(
             f'ball stats (10 s): infer_ms_avg={avg} n={count} '
             f'skipped_frames={skipped} balls_seen={n_balls} '
+            f"rejected={','.join(f'{k}:{v}' for k, v in rejected.items()) or 0} "
             f'backend={self._backend}'
         )
 

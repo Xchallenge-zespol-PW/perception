@@ -31,5 +31,7 @@ ball_node:
     conf: 0.35
     ball_labels: ["red ball"]       # raw model class names
 
-    border_px: 3                    # mask within this of the image edge = cut, not published
+    # Outline points within this of the image edge are not used for the
+    # circle fit (a ball cut by the edge keeps its centre if enough outline is left).
+    border_px: 3
     log_period_s: 1.0               # "balls: 1: 1.23 m r=3.4 cm, ..." (0 = off)

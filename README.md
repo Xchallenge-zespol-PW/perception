@@ -318,7 +318,7 @@ Tagi: druk matowy, płasko, z białą ramką wokół; zmierz bok czarnego kwadra
 
 ## Węzeł piłek (`ball_node`, etap 2)
 
-Krok 1: każda piłka widoczna w bieżącej klatce jako TF, bez śledzenia i pamięci. Model ten sam co dla kostek (v4, klasa `red ball`).
+Każda piłka widoczna w bieżącej klatce jako TF, bez śledzenia i pamięci (kroki 1–2). Model ten sam co dla kostek (v4, klasa `red ball`).
 
 ```bash
 ros2 launch g1_perception balls.launch.py                  # robot: /camera/d435, odom, TensorRT
@@ -331,10 +331,18 @@ ros2 launch g1_perception balls.launch.py camera_ns:=/camera/camera world_frame:
 |---------|------|
 | TF `ball_seen_<K>` | środek piłki w `world_frame` (`odom`), stempel klatki; `K` = kolejność od najbliższej w tej klatce, **nie** stały numer. Piłka poza kadrem zostawia stary TF (wiek = stempel) |
 | `/perception/balls` (`geometry_msgs/PoseArray`) | środki piłek z klatki w tej samej kolejności |
-| `/perception/balls/debug_image` | maska, okrąg, `K odległość r=promień`; żółta = ucięta krawędzią kadru (nie publikowana); rysowany tylko przy subskrybencie |
-| log co `log_period_s` | `balls: 1: 1.73 m r=3.4 cm, 2: ...` (odległość od kamery) |
+| `/perception/balls/debug_image` | maska, dopasowany okrąg, `K odległość r=promień`; czerwona = publikowana, żółta = odrzucona (powód w etykiecie); rysowany tylko przy subskrybencie |
+| log co `log_period_s` | `balls: 1: 1.73 m r=3.4 cm, 2: 0.95 m r=3.6 cm (duplicate)` (odległość od kamery) |
+| log co 10 s | `ball stats`: `balls_seen` (opublikowane), `rejected=hidden:N,shape:N,duplicate:N` |
 
-Pozycja: środek maski wyznacza promień widzenia, jej pole promień w pikselach `r_px`; mediana głębi z wewnętrznego koła maski to przód piłki `z_s`, środek leży o `r = r_px·z_s/(f − r_px)` dalej. Rozmiar piłki nie jest parametrem: zmierzony `r` sprawdza, czy pozycja ma sens (rzeczywisty promień piłki ≈ wynik z logu).
+Pozycja (`core/ball.py`, bez parametru rozmiaru piłki):
+
+1. **Okrąg na prawdziwym obrysie.** Z konturu maski odpadają punkty przy krawędzi kadru i krawędzie zasłonięcia, czyli tam, gdzie głębia tuż za maską jest przed piłką (słupek regału, ręka). Do reszty dopasowany jest okrąg, więc piłka zasłonięta w połowie albo ucięta krawędzią kadru zachowuje środek i rozmiar. Gdy obrys obejmuje mniej niż 144° (`MIN_ARC_FRAC`), zostaje środek i pole maski, a piłka jest odrzucona jako `hidden`.
+2. **Głębia środka.** Piksel w odległości `ρ` (w promieniach okręgu) widzi powierzchnię `r·√(1−ρ²)` przed środkiem, a `r = r_px·z_c/f`. Każdy piksel wewnątrz 0,85 promienia daje więc `z_c = z / (1 − r_px·√(1−ρ²)/f)`, a brana jest mediana.
+3. **Kształt** (tylko dla piłek o promieniu w obrazie ≥ 10 px, czyli do ok. 1,2 m; dalej D435 wygładza głębię). Promień z profilu głębi musi pasować do promienia z obrysu, inaczej odrzucenie jako `shape` (płaski czerwony obiekt, zła głębia).
+4. **Duplikaty.** Dwa środki bliżej niż jeden promień to ta sama piłka (druga maska YOLO). Zostaje lepsza, druga jest odrzucona jako `duplicate`.
+
+Na bagach z 2026-11-11 (co 10. klatka) liczba opublikowanych piłek zgadza się z etykietą w 257/310 klatek. Większość różnic to błędne etykiety (widać więcej piłek niż w nazwie baga). Przy stojącej kamerze środki są stabilne do ±1–7 mm do 2,9 m. Zmierzony promień: mediana 3,3 cm (p5–p95 2,8–4,2 cm, większy na dalekich piłkach, bo maska jest o ok. 1 px za duża).
 
 ---
 
