@@ -5,6 +5,7 @@ apriltag_node:
     camera_info_topic: /camera/camera/color/camera_info
     output_topic: /apriltag/detections
     debug_image_topic: /apriltag/debug_image   # drawn only while subscribed
+    summary_topic: /apriltag/summary           # JSON [{"id": 7, "distance_m": 1.832}] every frame
     family: "36h11"
     tag_size_m: 0.10              # side of the BLACK square, not the white border
     tag_ids: ""                   # keep only these, e.g. "0,1,2"; "" = all
@@ -14,3 +15,4 @@ apriltag_node:
     publish_tf: true
     tf_timeout_s: 0.05
     stats_period_s: 10.0
+    log_period_s: 1.0             # log "tags: 7: 1.83 m" at most this often; 0 = off

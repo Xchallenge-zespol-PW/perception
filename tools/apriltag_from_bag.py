@@ -125,7 +125,7 @@ def process_bag(bag: Path, args, detector, frames, writer) -> tuple[int, int]:
                         bag.name, f'{stamp:.6f}', tag.tag_id, frame,
                         *(f'{v:.5f}' for v in pose.position),
                         *(f'{v:.6f}' for v in pose.quat),
-                        f'{float(np.linalg.norm(tag.pose.position)):.4f}',
+                        f'{tag.distance_m:.4f}',
                         f'{tag.reproj_px:.3f}', f'{tag.ambiguity:.3f}',
                     ])
     return n_frames, n_tags

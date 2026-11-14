@@ -17,19 +17,21 @@ perception_node:
     output_topic: /perception/cubes
     debug_image_topic: /perception/debug_image
     mask_topic: /perception/mask
-    # Frame of the cube poses and of the TF <cube>: the logic node of
-    # exercise 1 reads everything relative to pelvis. Needs the camera
+    # Frame of the tracking and of the TF <cube> (the logic node of exercise 1
+    # reads them through TF in pelvis): the foot, which stands still, while the
+    # pelvis shifts about 2 cm when the waist turns and sways during a push, so
+    # cubes out of view kept poses that drifted with it. Needs the camera
     # connected to the robot TF tree (camera calibration).
-    target_frame: pelvis
+    target_frame: left_ankle_roll_link
     tf_timeout_s: 0.1
 
     # Pipeline: TensorRT engine on the GPU; if it cannot load (no CUDA, bad
     # engine), the node falls back to ONNX on CPU and logs a warning.
     segmenter: yolo_seg
     pose_estimator: geometric
-    model_path: /ws/models/cubes_seg_v2.engine
+    model_path: /ws/models/cubes_seg_v4_aug.engine
     device: "0"
-    fallback_model_path: /ws/models/cubes_seg_v2.onnx
+    fallback_model_path: /ws/models/cubes_seg_v4_aug.onnx
     fallback_device: cpu
     warmup_runs: 2
     conf: 0.35                    # 0.25 let low-score duplicates through (5th track)
@@ -39,16 +41,28 @@ perception_node:
     rois_path: ""
     hsv_path: ""
     labels_path: ""
+    # A mask lying by more than this (of the smaller mask) on a higher-score
+    # one is the same cube seen twice (both colours, whole cube and its top):
+    # dropped, whatever its class. 0 keeps every detection.
+    duplicate_overlap: 0.5
 
-    # Pose estimation
+    # Pose estimation. One table plane per frame, from margin_px around every
+    # detection with all masks cut out: a middle cube of the column no longer
+    # fits it to its neighbours' tops (5 cm above the table).
     cube_size_m: 0.05
     margin_px: 20
     z_min_m: 0.1
     z_max_m: 2.0
-    min_height_m: 0.01                # tape is flat: points must stand above the table
+    min_height_m: 0.00                # tape is flat: points must stand above the table
     min_above_ratio: 0.5
     footprint_min_m: 0.0
     footprint_max_m: 0.0             # real cubes ~5.4 x 7.1 cm (depth edges), p99 11 cm
+    # Pose update gates (rois_mode none): a cut-off / hidden cube, or every cube
+    # while the camera turns fast, keeps its track and colour votes but not
+    # the pose of that frame. 0 disables each.
+    pose_border_px: 3                 # mask within this of the image edge = cut off
+    min_visible_ratio: 0.45           # mask area / cube face at its depth; whole cubes 0.47..1.7 (p1 0.61)
+    max_camera_rot_deg_s: 20.0        # camera rotation in target_frame between frames
     # pose_estimator: pnp (YOLO-pose corners; see docs/pose_pnp.md)
     kpt_min_conf: 0.5             # min confidence of every corner
     pnp_max_reproj_px: 2.0        # max PnP reprojection error
@@ -65,14 +79,19 @@ perception_node:
     vote_window: 100
     vote_min_ratio: 0.7
     vote_min_frames: 0
+    # A detection joins a track within match_dist_m in x, y and match_max_dz_m
+    # in height (0 = match_dist_m in 3D): a height that came out wrong in one
+    # frame starts no new track, and the median drops it. A detection that close
+    # to a track taken in the same frame is a second mask of that cube.
     match_dist_m: 0.03
+    match_max_dz_m: 0.06
     max_missed_s: 1.0
     # Slots and the start layout count only tracks seen within fresh_s:
     # a split track (new id after a jump) stays alive max_missed_s.
     fresh_s: 0.3
     max_missed: 5
     # Exercise 1 (regulations 4.4): a column of 4 cubes along the robot's
-    # view (pelvis x), centres 6 cm apart. Place 1 = nearest cube.
+    # view (foot x), centres 6 cm apart. Place 1 = nearest cube.
     slot_axis: "x"
     expected_count: 4
     max_line_deviation_m: 0.03
@@ -86,6 +105,18 @@ perception_node:
     # pelvis sways. "" = target_frame.
     start_frame: left_ankle_roll_link
     latch_s: 1.0                      # stable time (frame stamps) before the start layout is frozen
-    reid_gate_m: 0.025                # lost cube found again within this along slot_axis
+    # A lost cube is found again by a track that voted its colour, lived
+    # reid_min_frames frames and stands within reid_max_dz_m of its last height:
+    # within reid_near_m of its last pose (x, y), or, pushed out of view, within
+    # reid_gate_m of it along the line of the start cubes but not at the last
+    # pose of another cube. A track missed for up to reid_hold_s keeps its name
+    # (no flipping at rest). 0.035: vision x (depth) was off by 1-3 cm (12.11),
+    # 0.025 lost pushed cubes; the neighbours along the line are 6 cm apart.
+    reid_gate_m: 0.035
+    reid_near_m: 0.03
+    reid_max_dz_m: 0.04               # the hand over the table is no cube
+    reid_hold_s: 0.5
+    reid_min_frames: 3
+    reid_require_color: true
 
     publish_rate_hz: 5.0

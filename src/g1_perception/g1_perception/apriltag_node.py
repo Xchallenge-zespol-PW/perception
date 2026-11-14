@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 
 import cv2
@@ -15,7 +16,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
-from std_msgs.msg import Header
+from std_msgs.msg import Header, String
 from tf2_ros import (
     Buffer,
     ConnectivityException,
@@ -32,7 +33,9 @@ from vision_msgs.msg import (
 
 from g1_perception.core.apriltag import (
     AprilTagDetector,
+    format_tags,
     parse_tag_ids,
+    tag_summary,
     TagDetection,
 )
 from g1_perception.core.frame_utils import intrinsics_from_k
@@ -47,6 +50,7 @@ DEFAULT_PARAMS = {
     'camera_info_topic': '/camera/camera/color/camera_info',
     'output_topic': '/apriltag/detections',
     'debug_image_topic': '/apriltag/debug_image',
+    'summary_topic': '/apriltag/summary',
     'family': '36h11',
     'tag_size_m': 0.10,
     'tag_ids': '',
@@ -56,6 +60,7 @@ DEFAULT_PARAMS = {
     'publish_tf': True,
     'tf_timeout_s': 0.05,
     'stats_period_s': 10.0,
+    'log_period_s': 1.0,
 }
 
 
@@ -67,7 +72,9 @@ class AprilTagNode(Node):
     frame (stamp of the image) and one ``Detection3D`` (``id`` = tag id,
     ``class_id`` = ``tag<family>``, ``score`` = 1 / (1 + reprojection px))
     on ``output_topic``, in ``target_frame`` when its TF is known, else in
-    the camera frame.
+    the camera frame. ``summary_topic`` gets the ids and camera distances
+    of every frame as JSON, ``[{"id": 7, "distance_m": 1.832}]``, and the
+    same is logged at most every ``log_period_s`` (0 = off).
     """
 
     def __init__(self) -> None:
@@ -98,6 +105,11 @@ class AprilTagNode(Node):
         self._pub_debug = self.create_publisher(
             Image, str(p['debug_image_topic']), 1
         )
+        self._pub_summary = self.create_publisher(
+            String, str(p['summary_topic']), 10
+        )
+        self._log_period_s = float(p['log_period_s'])
+        self._last_log = -float('inf')
         self.create_subscription(
             CameraInfo, str(p['camera_info_topic']), self._on_info,
             qos_profile_sensor_data,
@@ -152,6 +164,8 @@ class AprilTagNode(Node):
                 for t in posed
             ])
         self._pub.publish(self._detections(msg.header, posed))
+        self._pub_summary.publish(String(data=json.dumps(tag_summary(posed))))
+        self._log_tags(tags)
         if self._pub_debug.get_subscription_count() > 0:
             self._publish_debug(rgb, tags, msg.header)
 
@@ -232,6 +246,17 @@ class AprilTagNode(Node):
         out = self._bridge.cv2_to_imgmsg(bgr, encoding='bgr8')
         out.header = header
         self._pub_debug.publish(out)
+
+    def _log_tags(self, tags: list[TagDetection]) -> None:
+        """Log ids and distances, at most every ``log_period_s``."""
+        now = time.monotonic()
+        if (
+            not tags or self._log_period_s <= 0.0
+            or now - self._last_log < self._log_period_s
+        ):
+            return
+        self._last_log = now
+        self.get_logger().info(f'tags: {format_tags(tags)}')
 
     def _log_stats(self) -> None:
         if self._n_frames == 0:

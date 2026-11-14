@@ -28,16 +28,19 @@ def _cube(
     x: float,
     *,
     y: float = 0.0,
+    z: float = -0.045,
     label: str = LABEL_RED,
     missed: int = 0,
+    n_frames: int = 10,
+    last_seen: float = 0.0,
 ) -> TrackedCube:
     return TrackedCube(
         track_id=track_id,
         label=label,
         score=1.0,
-        n_frames=10,
+        n_frames=n_frames,
         pose=Pose(
-            position=np.array([x, y, -0.045], dtype=np.float64),
+            position=np.array([x, y, z], dtype=np.float64),
             quat=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64),
             score=1.0,
         ),
@@ -45,6 +48,7 @@ def _cube(
         yaw_consistency=1.0,
         detection=None,
         missed=missed,
+        last_seen=last_seen,
     )
 
 
@@ -231,7 +235,7 @@ def test_lost_cube_is_found_again_along_its_line():
     others = _start_tracks()[1:]
     camera.frame(others)  # cube_1 occluded, its track dropped
 
-    pushed = _cube(42, START_X[0] + 0.015, y=0.3, label=LABEL_UNCERTAIN)
+    pushed = _cube(42, START_X[0] + 0.015, y=0.3, label=COLORS[0])
     cube_1 = _by_name(camera.frame(others + [pushed]))['cube_1']
 
     assert cube_1.track_id == 42
@@ -239,11 +243,37 @@ def test_lost_cube_is_found_again_along_its_line():
     assert cube_1.label == LABEL_RED
 
 
+@pytest.mark.parametrize('yaw_deg', [-8.0, 5.0, 8.0])
+def test_lost_cube_is_found_again_along_a_turned_line(yaw_deg):
+    # The robot stands turned to the table: the line of the cubes is off x and
+    # the push across it moves the cube 4 cm along x at 8 deg.
+    yaw = np.radians(yaw_deg)
+    line = np.array([np.cos(yaw), np.sin(yaw)])
+    across = np.array([-np.sin(yaw), np.cos(yaw)])
+    places = [np.array([START_X[0], 0.0]) + line * 0.06 * i for i in range(4)]
+    start = [
+        _cube(10 + i, p[0], y=p[1], label=label)
+        for i, (p, label) in enumerate(zip(places, COLORS))
+    ]
+    camera = _Camera(CubeRegistry(axis='x', latch_s=2 * DT))
+    for _ in range(3):
+        camera.frame(start)
+    others = start[1:]
+    camera.frame(others)
+
+    end = places[0] + across * 0.3
+    pushed = _cube(42, end[0], y=end[1], label=COLORS[0])
+    cube_1 = _by_name(camera.frame(others + [pushed]))['cube_1']
+
+    assert cube_1.track_id == 42
+
+
 def test_new_track_takes_over_from_an_unseen_live_track():
     camera = _latched()
     tracked = _start_tracks()
-    tracked[2] = _cube(12, START_X[2], label=COLORS[2], missed=1)
-    moved = _cube(50, START_X[2], y=-0.1, label=LABEL_UNCERTAIN)
+    # Missed for longer than reid_hold_s (last seen at stamp 0).
+    tracked[2] = _cube(12, START_X[2], label=COLORS[2], missed=4)
+    moved = _cube(50, START_X[2], y=-0.1, label=COLORS[2])
 
     cube_3 = _by_name(camera.frame(tracked + [moved]))['cube_3']
 
@@ -277,8 +307,8 @@ def test_two_lost_cubes_take_the_nearest_tracks():
     kept = [_start_tracks()[0], _start_tracks()[3]]
     camera.frame(kept)  # cube_2 and cube_3 (both green) lost
 
-    near_3 = _cube(70, START_X[2] - 0.005, y=-0.3, label=LABEL_UNCERTAIN)
-    near_2 = _cube(71, START_X[1] + 0.01, y=-0.3, label=LABEL_UNCERTAIN)
+    near_3 = _cube(70, START_X[2] - 0.005, y=-0.3, label=COLORS[2])
+    near_2 = _cube(71, START_X[1] + 0.01, y=-0.3, label=COLORS[1])
     cubes = _by_name(camera.frame(kept + [near_3, near_2]))
 
     assert cubes['cube_2'].track_id == 71
@@ -290,21 +320,107 @@ def test_one_track_names_only_one_cube():
     kept = [_start_tracks()[0], _start_tracks()[3]]
     camera.frame(kept)
 
-    between = _cube(80, (START_X[1] + START_X[2]) / 2, label=LABEL_UNCERTAIN)
+    between = _cube(
+        80, (START_X[1] + START_X[2]) / 2, y=0.2, label=LABEL_GREEN
+    )
     cubes = _by_name(camera.frame(kept + [between]))
 
     named = [c.name for c in cubes.values() if c.track_id == 80]
     assert len(named) == 1
 
 
+def test_track_missed_for_a_moment_keeps_its_name():
+    camera = _latched()
+    tracked = _start_tracks()
+    # Track 12 of cube_3 missed one frame; a duplicate track sits on the cube.
+    tracked[2] = _cube(
+        12, START_X[2], label=COLORS[2], missed=1, last_seen=camera.stamp - DT
+    )
+    duplicate = _cube(51, START_X[2] + 0.005, label=COLORS[2])
+
+    cube_3 = _by_name(camera.frame(tracked + [duplicate]))['cube_3']
+
+    assert cube_3.track_id == 12 and cube_3.pose is None
+
+
+def test_young_or_undecided_track_takes_no_name():
+    camera = _latched()
+    others = _start_tracks()[1:]
+    young = _cube(43, START_X[0], y=0.3, label=COLORS[0], n_frames=1)
+    undecided = _cube(44, START_X[0], y=0.2, label=LABEL_UNCERTAIN)
+
+    cube_1 = _by_name(camera.frame(others + [young, undecided]))['cube_1']
+
+    assert cube_1.pose is None and cube_1.track_id == 10
+
+
+def test_track_above_the_table_takes_no_name():
+    camera = _latched()
+    others = _start_tracks()[1:]
+    hand = _cube(45, START_X[0], y=0.1, z=0.06, label=COLORS[0])
+
+    cube_1 = _by_name(camera.frame(others + [hand]))['cube_1']
+
+    assert cube_1.pose is None
+
+
+def test_bound_track_jumping_above_the_table_is_not_followed():
+    camera = _latched()
+    tracked = _start_tracks()
+    tracked[0] = _cube(10, START_X[0], z=0.05, label=COLORS[0])
+
+    cube_1 = _by_name(camera.frame(tracked))['cube_1']
+
+    assert cube_1.pose is None
+    assert float(cube_1.last_pose.position[2]) == pytest.approx(-0.045)
+
+
+def test_track_at_another_cubes_place_is_not_taken_along_the_line():
+    # Gate along x wider than the noise: cube_2 (green) seen at its place,
+    # cube_3 (green) lost; a green track at cube_2's place is cube_2's.
+    camera = _latched(reid_gate_m=0.07)
+    tracked = _start_tracks()
+    del tracked[2]
+    tracked[1] = _cube(11, START_X[1], label=COLORS[1], missed=4)
+    camera.frame(tracked)  # cube_2 and cube_3 lost
+
+    ghost = _cube(52, START_X[1] + 0.01, label=COLORS[1])
+    cubes = _by_name(camera.frame([tracked[0], tracked[2], ghost]))
+
+    assert cubes['cube_2'].track_id == 52
+    assert cubes['cube_3'].pose is None
+
+
+def test_track_near_the_last_pose_wins_over_one_along_the_line():
+    camera = _latched()
+    others = _start_tracks()[1:]
+    camera.frame(others)
+
+    along = _cube(46, START_X[0], y=0.3, label=COLORS[0])
+    near = _cube(47, START_X[0] + 0.02, y=0.01, label=COLORS[0])
+    cube_1 = _by_name(camera.frame(others + [along, near]))['cube_1']
+
+    assert cube_1.track_id == 47
+
+
+def test_last_seen_is_the_stamp_of_the_last_pose():
+    camera = _latched()
+    stamp = camera.stamp
+    camera.frame(_start_tracks())
+    camera.frame(_start_tracks()[1:])
+
+    known = _by_name(camera.registry.known())
+
+    assert known['cube_1'].last_seen == pytest.approx(stamp)
+    assert known['cube_2'].last_seen == pytest.approx(stamp + DT)
+
+
 def test_older_stamp_after_the_freeze_finds_cubes_by_position():
     camera = _latched()
     # The tracker restarted its ids: id 10 is now the cube at place 4.
     renumbered = [
-        _cube(13, START_X[0], label=LABEL_UNCERTAIN),
-        _cube(12, START_X[1], label=LABEL_UNCERTAIN),
-        _cube(11, START_X[2], label=LABEL_UNCERTAIN),
-        _cube(10, START_X[3], label=LABEL_UNCERTAIN),
+        _cube(13 - i, x, label=label)
+        for i, (x, label) in enumerate(zip(START_X, COLORS))
     ]
     camera.stamp = 0.0
 
@@ -334,6 +450,10 @@ def test_reset_waits_for_a_new_layout_and_counts_starts():
         {'name_prefix': ''},
         {'latch_s': -0.1},
         {'reid_gate_m': 0.0},
+        {'reid_near_m': 0.0},
+        {'reid_max_dz_m': 0.0},
+        {'reid_hold_s': -0.1},
+        {'reid_min_frames': -1},
     ],
 )
 def test_rejects_bad_arguments(kwargs):

@@ -8,8 +8,10 @@ import pytest
 
 from g1_perception.core.apriltag import (
     AprilTagDetector,
+    format_tags,
     parse_tag_ids,
     tag_object_points,
+    tag_summary,
 )
 from g1_perception.core.geometry import quat_to_rotation_matrix
 
@@ -84,3 +86,25 @@ def test_pose_dropped_above_reprojection_limit():
     img = _render([(1, np.array([np.pi, 0.0, 0.0]), np.array([0.0, 0.0, 0.7]))])
     tags = AprilTagDetector(max_reproj_px=0.0).detect(img, K)
     assert len(tags) == 1 and tags[0].pose is None
+
+
+def test_summary_reports_id_and_camera_distance():
+    img = _render([
+        (5, np.array([np.pi, 0.0, 0.0]), np.array([0.15, 0.0, 0.9])),
+        (2, np.array([np.pi, 0.0, 0.0]), np.array([-0.15, 0.0, 0.6])),
+    ])
+    tags = AprilTagDetector().detect(img, K)
+
+    summary = tag_summary(tags)
+    assert [s['id'] for s in summary] == [2, 5]
+    assert summary[0]['distance_m'] == pytest.approx(np.hypot(0.15, 0.6), abs=0.01)
+    assert summary[1]['distance_m'] == pytest.approx(np.hypot(0.15, 0.9), abs=0.01)
+    assert format_tags(tags).startswith('2: 0.62 m, 5: 0.91 m')
+
+
+def test_summary_skips_tags_without_pose():
+    img = _render([(1, np.array([np.pi, 0.0, 0.0]), np.array([0.0, 0.0, 0.7]))])
+    tags = AprilTagDetector(max_reproj_px=0.0).detect(img, K)
+    assert np.isnan(tags[0].distance_m)
+    assert tag_summary(tags) == []
+    assert format_tags(tags) == '1: no pose'

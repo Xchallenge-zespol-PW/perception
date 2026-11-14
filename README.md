@@ -68,7 +68,8 @@ Logika (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) nie importuj
 │   │   │   ├── debug_vis.py
 │   │   │   ├── geometry.py
 │   │   │   ├── apriltag.py        # AprilTag: aruco + IPPE
-│   │   │   └── tf_chain.py        # TF z /tf w bagu (offline)
+│   │   │   ├── tf_chain.py        # TF z /tf w bagu (offline)
+│   │   │   └── visibility.py      # bramki aktualizacji pozy (ucięta / zasłonięta kostka, obrót kamery)
 │   │   ├── node_config.py
 │   │   ├── ros_conversions.py
 │   │   ├── perception_node.py     # entry point: perception_node
@@ -213,15 +214,15 @@ ros2 launch g1_perception perception.launch.py config:=params_robot.yaml \
 |-------|-----------|
 | Wejście | `color_topic`, `depth_topic` (aligned, `16UC1` mm lub `32FC1` m), `camera_info_topic`, `sync_queue_size`, `sync_slop_s` |
 | Wyjście | `output_topic` (`/perception/cubes`), `debug_image_topic`, `mask_topic`, `target_frame` (`""` = ramka kamery), `tf_timeout_s` |
-| Pipeline | `segmenter` (`yolo_seg` \| `hsv`), `pose_estimator` (`geometric` \| `centroid` \| `pnp`), `model_path`, `device`, `fallback_model_path` / `fallback_device` (gdy `model_path` nie ruszy na `device`), `warmup_runs` (predykcje na pustym obrazie przy starcie), `conf`, `verify_hsv`, `rois_mode` (`none` \| `image_roi`), `rois_path` / `hsv_path` / `labels_path` (`""` = domyślne; w `none` brak pliku ROI nie jest błędem) |
-| Poza | `cube_size_m`, `margin_px`, `z_min_m`, `z_max_m` (≤ 0 wyłącza); kształt (`geometric`): `min_height_m` (do pozy idą tylko punkty maski od tej wysokości do 1,5 × `cube_size_m` nad stołem; ≤ 0 wyłącza), `min_above_ratio` (mniejsza część punktów nad stołem = płaskie, np. taśma, odrzucone), `footprint_min_m` / `footprint_max_m` (prostokąt na stole; 0 wyłącza) |
+| Pipeline | `segmenter` (`yolo_seg` \| `hsv`), `pose_estimator` (`geometric` \| `centroid` \| `pnp`), `model_path`, `device`, `fallback_model_path` / `fallback_device` (gdy `model_path` nie ruszy na `device`), `warmup_runs` (predykcje na pustym obrazie przy starcie), `conf`, `verify_hsv`, `rois_mode` (`none` \| `image_roi`), `rois_path` / `hsv_path` / `labels_path` (`""` = domyślne; w `none` brak pliku ROI nie jest błędem), `duplicate_overlap` (w `none`: maska leżąca w większej części niż ta na masce wykrycia z wyższym wynikiem, liczonej od mniejszej z nich, to ta sama kostka widziana drugi raz, np. w obu kolorach albo cała i sama górna ściana, i odpada niezależnie od klasy; 0 wyłącza) |
+| Poza | `cube_size_m`, `margin_px` (w `none` z `geometric`: jedna płaszczyzna stołu na klatkę, z `margin_px` wokół każdego wykrycia bez masek wszystkich wykryć; wysokość kostki to płaszczyzna + `cube_size_m`/2, więc płaszczyzna liczona osobno dla każdej kostki, bez masek sąsiadów, kładła środkową kostkę kolumny na górnych ścianach sąsiadów, 5 cm za wysoko), `z_min_m`, `z_max_m` (≤ 0 wyłącza); kształt (`geometric`): `min_height_m` (do pozy idą tylko punkty maski od tej wysokości do 1,5 × `cube_size_m` nad stołem; ≤ 0 wyłącza), `min_above_ratio` (mniejsza część punktów nad stołem = płaskie, np. taśma, odrzucone), `footprint_min_m` / `footprint_max_m` (prostokąt na stole; 0 wyłącza) |
 | PnP (`pose_estimator: pnp`) | `kpt_min_conf`, `pnp_max_reproj_px`, `pnp_max_depth_diff_m` (przy `pnp_depth_diff_ref_m`, dalej × (z / ref)²), `pnp_max_normal_deg`, `pnp_fallback` (`geometric` \| `none`) |
-| Głosowanie / tracking | `vote_window_s` (> 0 = okno czasowe w sekundach stempli klatek; 0 = okno klatek), `vote_min_votes` (min. głosów w oknie czasowym), `vote_window` (okno klatek; w trybie czasowym limit głosów), `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`), `match_dist_m`, `max_missed_s` (> 0 = track znika po tylu sekundach bez detekcji) / `max_missed` (klatki), `fresh_s` (> 0 = do miejsc i zamrożenia liczą się tylko tracki widziane w ostatnich tylu sekundach; rozjechany track nie robi z jednej kostki dwóch) |
+| Głosowanie / tracking | `vote_window_s` (> 0 = okno czasowe w sekundach stempli klatek; 0 = okno klatek), `vote_min_votes` (min. głosów w oknie czasowym), `vote_window` (okno klatek; w trybie czasowym limit głosów), `vote_min_ratio`, `vote_min_frames` (0 = `vote_window`), `match_dist_m` (w 3D, a z `match_max_dz_m` > 0 w x, y przy różnicy wysokości do `match_max_dz_m`: wysokość źle policzona w jednej klatce nie zakłada nowego tracka, a mediana ją pomija; wykrycie tak blisko tracka zajętego albo założonego w tej samej klatce to druga maska tej kostki i nie zakłada tracka), `max_missed_s` (> 0 = track znika po tylu sekundach bez detekcji) / `max_missed` (klatki), `fresh_s` (> 0 = do miejsc i zamrożenia liczą się tylko tracki widziane w ostatnich tylu sekundach; rozjechany track nie robi z jednej kostki dwóch) |
 | Miejsca (`rois_mode=none`) | `slot_axis` (kolejność numerów: miejsce 1 = najmniejsza współrzędna; na robocie `x`, `cube_1` najbliżej), `expected_count`, `max_line_deviation_m`, `min_spacing_m` / `max_spacing_m` (odstęp między sąsiednimi kostkami mierzony wzdłuż dopasowanej linii rzędu, więc rząd może leżeć pod kątem do `slot_axis`); przy większej liczbie tracków (do 8) przechodzi, gdy dokładnie jedna `expected_count`-ka spełnia te warunki, a nadmiarowe tracki są pomijane |
 | Ćwiczenie 1 (`rois_mode=none`) | `cube_colors_topic`, `cube_name_prefix`, `start_frame` (`""` = `target_frame`), `latch_s` (ile sekund stempli układ musi być stabilny przed zamrożeniem), `reid_gate_m` |
 | Tempo | `publish_rate_hz` |
 
-`params_robot.yaml` używa `rois_mode: none` (YOLO → tracker 3D → TF → numery miejsc) i ustawień ćwiczenia 1: `target_frame: pelvis`, `slot_axis: x` (kolumna kostek wzdłuż widoku robota, środki co 6 cm, `cube_1` najbliżej), `start_frame: left_ankle_roll_link`. `params_laptop.yaml` zostaje w `camera_link` z `slot_axis: y`.
+`params_robot.yaml` używa `rois_mode: none` (YOLO → tracker 3D → TF → numery miejsc) i ustawień ćwiczenia 1: `target_frame: left_ankle_roll_link` (stopa stoi w miejscu; miednica przesuwa się o ok. 2 cm przy obrocie pasa i kołysze przy pchnięciu), `slot_axis: x` (kolumna kostek wzdłuż widoku robota, środki co 6 cm, `cube_1` najbliżej), `start_frame: left_ankle_roll_link`. `params_laptop.yaml` zostaje w `camera_link` z `slot_axis: y`.
 
 ### Kontrakt wiadomości
 
@@ -263,7 +264,17 @@ Tylko w `rois_mode=none`. Logika czyta wszystkie ramki względem `pelvis`, a st�
 
 Ramki startowe wiszą pod `start_frame`, bo logika czyta start przy każdym sprawdzeniu linii: na robocie to stopa (stoi w miejscu, gdy miednica się kołysze; bez zależności od odometrii). Bez TF `start_frame ← target_frame` układ nie jest zamrażany (warning w logu).
 
-**Bieżące pozy**: `/tf` `<target_frame> → <cube>`, stempel obrazu, tylko dla kostek widzianych w tej klatce. Nazwa trzyma się swojego tracka także wtedy, gdy kostka wyjedzie z linii. Gdy track zniknie (dłoń zasłoni kostkę, kamera obróci się z pasem) albo zagłosuje drugi kolor, nazwę przejmuje nowy track, którego współrzędna wzdłuż `slot_axis` jest w `reid_gate_m` od startowej: pchnięcie idzie w poprzek kolumny, a sąsiednia kostka jest 6 cm dalej. Log: `cube_N found again as track …`. Gdy stempel się cofnie (bag `--loop`), tracker numeruje tracki od nowa, więc każda nazwa zapomina swój track i jest odnajdywana po pozycji.
+**Bieżące pozy**: `/tf` `<target_frame> → <cube>` co `publish_rate_hz` dla każdej kostki układu, ze stemplem bieżącego czasu; kostka poza kadrem zostaje w ostatniej widzianej pozie. Dodatkowo `<target_frame> → <cube>_seen` tylko dla kostek widzianych w danej klatce, ze stemplem tej klatki: jego wiek mówi, jak świeża jest poza (`cube_sorting_node` czyta właśnie te ramki, `cube_seen_suffix` w `task_1.yaml`). Nazwa trzyma się swojego tracka także wtedy, gdy kostka wyjedzie z linii. Gdy track zniknie (dłoń zasłoni kostkę, kamera obróci się z pasem) albo zagłosuje drugi kolor, nazwę przejmuje nowy track, który leży w `reid_gate_m` od ostatniej pozy wzdłuż linii kostek: pchnięcie idzie w poprzek kolumny, a sąsiednia kostka jest 6 cm dalej. Linia to główna oś układu startowego (`slot_axis` tylko dla układu o rozrzucie poniżej 2 cm), bo przy robocie skręconym o 5° do stołu kostka pchnięta o 30 cm przesuwa się o 2,6 cm wzdłuż `slot_axis`. Log: `cube_N found again as track …`. Gdy stempel się cofnie (bag `--loop`), tracker numeruje tracki od nowa, więc każda nazwa zapomina swój track i jest odnajdywana po pozycji.
+
+**Bramki aktualizacji pozy** (tylko `rois_mode=none`): gdy kostka jest ucięta lub zasłonięta, albo gdy kamera szybko się obraca, klatka nie zmienia pozy kostki. Track dalej żyje (nie znika, nie dostaje nowego numeru) i głosuje kolor, ale pozycja z tej klatki nie trafia do mediany, więc `<cube>` trzyma ostatnią dobrą pozę. Taka klatka nie zakłada też nowego tracka. Liczniki w logu `perception stats`: `hidden_poses` (kostki), `turning_frames` (klatki).
+
+| Parametr | Na robocie | Co |
+|----------|-----------|----|
+| `pose_border_px` | 3 | maska bliżej krawędzi obrazu niż tyle px = kostka ucięta |
+| `min_visible_ratio` | 0.45 | pole maski / ściana kostki w jej odległości. Całe kostki z bagów 11.2026 (model v4, 1529 detekcji): 0.47–1.7, p1 0.61, mediana 0.91 (zależy od kąta patrzenia); 0.45 łapie kostki zasłonięte mniej więcej w połowie i bardziej |
+| `max_camera_rot_deg_s` | 20 | obrót kamery w `target_frame` między kolejnymi klatkami (z TF). Do dostrojenia na bagach z `/tf` (`record_cubes.sh` nagrywa go od 11.2026) |
+
+`0` wyłącza daną bramkę.
 
 **`~/reset`** (`std_srvs/Trigger`, `/perception_node/reset`): zapomina układ i tracki. Wywołaj przed każdą kolejną próbą (kolory są losowane przed każdą); nowy układ dostaje nowe ramki startowe i nową wiadomość z kolorami.
 
@@ -284,10 +295,14 @@ ros2 launch g1_perception apriltag.launch.py tag_size_m:=0.162 target_frame:=pel
 |---------|----|
 | TF `tag_<id>` | pod ramką optyczną kamery, stempel obrazu. Środek tagu, x w prawo, y w górę, z z nadrukowanej strony (dla tagu na podłodze: w górę) |
 | `/apriltag/detections` (`vision_msgs/Detection3DArray`) | `id` = numer tagu, `class_id` = `tag36h11`, `score` = 1 / (1 + błąd reprojekcji px), poza w `target_frame` (gdy jego TF jest znany, inaczej w ramce kamery), `bbox.size` = bok tagu |
+| `/apriltag/summary` (`std_msgs/String`) | co klatkę JSON z numerem i odległością kamera–środek tagu: `[{"id": 7, "distance_m": 1.832}]` (`[]` = brak tagów z pozą); odległość zawsze od kamery, niezależnie od `target_frame` |
 | `/apriltag/debug_image` | obrysy, numery i osie (x czerwona, y zielona, z niebieska); rysowany tylko przy subskrybencie |
+| log co `log_period_s` | `tags: 7: 1.83 m, 3: 2.41 m` (tylko gdy coś widać; `0` = wyłączony) |
 | log co `stats_period_s` | `frames`, `with_tags`, `ids`, `detect_ms_avg` |
 
-Parametry (`config/apriltag.yaml`): `family`, `tag_size_m` (bok **czarnego** kwadratu, nie białej ramki), `tag_ids` (`"0,1,2"`, `""` = wszystkie), `max_reproj_px` (gorsze dopasowanie rogów = brak pozy), `target_frame`, `tf_prefix`, `publish_tf`, `image_topic`, `camera_info_topic`.
+Parametry (`config/apriltag.yaml`): `family`, `tag_size_m` (bok **czarnego** kwadratu, nie białej ramki), `tag_ids` (`"0,1,2"`, `""` = wszystkie), `max_reproj_px` (gorsze dopasowanie rogów = brak pozy), `target_frame`, `tf_prefix`, `publish_tf`, `image_topic`, `camera_info_topic`, `summary_topic`, `log_period_s`.
+
+Podgląd numerów i odległości: `ros2 topic echo /apriltag/summary`. Odległość zależy od `tag_size_m` (zły bok = odległość przeskalowana o ten sam czynnik).
 
 Nagranie do późniejszej analizy (`tools/apriltag_from_bag.py`) musi mieć TF, inaczej nie da się przeliczyć tagów do ramek robota:
 
@@ -506,6 +521,7 @@ label_map = load_label_map()  # {'red cube': 'red', 'zielony': 'green', ...}
 | `quad_mask(corners, shape)` | HxW bool wypełnionego wielokąta narożników (Nx2 albo Kx3); dla `yolo_pose` tylko górna ściana |
 | `fit_plane_ransac(points)` | `(normal, d, n_inliers)` |
 | `table_plane_around(roi, mask, …)` | płaszczyzna stołu wokół ROI bez maski obiektu |
+| `table_plane_around_rois(rois, exclude, …)` | jedna płaszczyzna stołu wokół wielu ROI bez pikseli `exclude` (maski wszystkich wykryć) |
 | `cube_pose_on_table(points, plane, size=0.05)` | `Pose` (minAreaRect, yaw % 90°, środek + size/2 wzdłuż normalnej) |
 
 ### `pipeline`
@@ -579,7 +595,7 @@ Import `ultralytics` tylko wewnątrz `YoloSegSegmenter` (opcjonalna zależność
 | Nazwa | Moduł | Zachowanie |
 |-------|-------|------------|
 | `centroid` | `pose/centroid.py` | Mediana punktów 3D; orientacja z normalnej stołu |
-| `geometric` | `pose/geometric.py` | `cube_pose_on_table` (RANSAC stołu + minAreaRect) |
+| `geometric` | `pose/geometric.py` | `cube_pose_on_table` (RANSAC stołu + minAreaRect); `estimate_many` (pipeline w `rois_mode=none`): wszystkie wykrycia klatki na jednej płaszczyźnie stołu bez ich masek |
 | `pnp` | `pose/pnp.py` | orientacja z 4 narożników (IPPE_SQUARE, rzut na stół), pozycja z głębi w czworokącie; odrzucenie (`no_keypoints`, `kpt_conf`, `no_table`, `no_depth`, `pnp_failed`, `reproj`, `tilt`, `depth_diff`) → `geometric` na górnej ścianie albo `None` |
 
 ---
@@ -593,7 +609,7 @@ Import `ultralytics` tylko wewnątrz `YoloSegSegmenter` (opcjonalna zależność
 - `/camera/camera/color/image_raw` (`rgb8`)
 - `/camera/camera/aligned_depth_to_color/image_raw` (`16UC1`, mm)
 - `/camera/camera/color/camera_info`
-- `/tf_static`
+- `/tf`, `/tf_static` (`record_cubes.sh`; `/tf` od 11.2026: ruch kamery w bagu, np. do strojenia `max_camera_rot_deg_s`)
 
 **Ułożenie:** `R`/`G`/`X` od lewej (np. `RGGR`).
 

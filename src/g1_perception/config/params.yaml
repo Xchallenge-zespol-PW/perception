@@ -40,10 +40,16 @@ perception_node:
     # Shape check: tape and other flat things are not cubes. Mask points
     # min_height_m..1.5*cube_size_m above the table, at least min_above_ratio
     # of them, footprint on the table footprint_min_m..footprint_max_m.
-    min_height_m: 0.01             # <= 0 disables the height check
+    min_height_m: 0.00             # <= 0 disables the height check
     min_above_ratio: 0.5
     footprint_min_m: 0.0          # 0 disables
     footprint_max_m: 0.0          # 0 disables; real cubes ~5.4 x 7.1 cm (depth edges), p99 11 cm
+    # Pose update gates (rois_mode none): a cut-off / hidden cube, or every cube
+    # while the camera turns fast, keeps its track and colour votes but not
+    # the pose of that frame. 0 disables each.
+    pose_border_px: 3                 # mask within this of the image edge = cut off
+    min_visible_ratio: 0.45           # mask area / cube face at its depth; whole cubes 0.47..1.7 (p1 0.61)
+    max_camera_rot_deg_s: 20.0        # camera rotation in target_frame between frames
 
     # Multi-frame voting / 3D tracking (rois_mode=none)
     vote_window: 10
@@ -63,7 +69,18 @@ perception_node:
     cube_name_prefix: cube_
     start_frame: ""
     latch_s: 1.0                   # stable time (frame stamps) before freezing the layout
-    reid_gate_m: 0.025             # lost cube found again within this along slot_axis
+    # A lost cube is found again by a track that voted its colour, lived
+    # reid_min_frames frames and stands within reid_max_dz_m of its last height:
+    # within reid_near_m of its last pose (x, y), or, pushed out of view, within
+    # reid_gate_m of it along the line of the start cubes but not at the last
+    # pose of another cube.
+    # A track missed for up to reid_hold_s keeps its name (no flipping at rest).
+    reid_gate_m: 0.025
+    reid_near_m: 0.03
+    reid_max_dz_m: 0.04               # the hand over the table is no cube
+    reid_hold_s: 0.5
+    reid_min_frames: 3
+    reid_require_color: true
 
     # Processing / publishing rate
     publish_rate_hz: 5.0

@@ -62,6 +62,10 @@ from g1_perception.core.tracker import (  # noqa: E402
     TrackedCube,
 )
 from g1_perception.core.types import Frame, SlotResult  # noqa: E402
+from g1_perception.core.visibility import (  # noqa: E402
+    angular_speed_deg_s,
+    mark_hidden,
+)
 from g1_perception.core.voting import SlotVoter, VotedSlot  # noqa: E402
 from g1_perception.node_config import (  # noqa: E402
     DEFAULT_PARAMS,
@@ -81,6 +85,7 @@ from g1_perception.ros_conversions import (  # noqa: E402
 # The logic node of exercise 1 reads the start pose of cube <name> from the
 # static TF frame <name>_start.
 START_FRAME_SUFFIX = '_start'
+SEEN_FRAME_SUFFIX = '_seen'
 
 
 @dataclass(frozen=True)
@@ -134,9 +139,16 @@ class PerceptionNode(Node):
     :class:`CubeRegistry` and published once: the static TF
     ``<name>_start`` in ``start_frame`` and ``xchallenge_msgs/CubeColors``
     (transient local). The cubes keep their names while they are pushed, and
-    each cube seen in a frame is published as the TF ``<name>`` in
-    ``target_frame``. ``~/reset`` (std_srvs/Trigger) forgets the layout
-    before the next attempt.
+    every cube of the layout is published as the TF ``<name>`` in
+    ``target_frame`` (stamped now, at its last seen pose), each cube seen in
+    a frame also as ``<name>_seen`` with the stamp of that frame, so its age
+    tells how fresh the pose is. ``~/reset`` (std_srvs/Trigger) forgets the
+    layout before the next attempt.
+
+    Pose gates: a cut-off or hidden cube (``pose_border_px``,
+    ``min_visible_ratio``), or every cube of a frame taken while the camera
+    turns faster than ``max_camera_rot_deg_s`` in ``target_frame``, keeps
+    its track and colour votes but does not move its pose.
     """
 
     def __init__(self) -> None:
@@ -177,6 +189,14 @@ class PerceptionNode(Node):
             CubeRegistry(**registry_kwargs(p)) if self._free else None
         )
         self._target_frame = str(p['target_frame']).strip()
+        self._hidden_kw = {
+            'size': float(p['cube_size_m']),
+            'border_px': int(p['pose_border_px']),
+            'min_visible_ratio': float(p['min_visible_ratio']),
+        }
+        self._max_rot_deg_s = float(p['max_camera_rot_deg_s'])
+        # (stamp, rotation_xyzw) of the camera in target_frame, last frame.
+        self._prev_camera: tuple[float, np.ndarray] | None = None
         self._start_frame = str(p['start_frame']).strip()
         self._bridge = CvBridge()
 
@@ -190,6 +210,7 @@ class PerceptionNode(Node):
         # Used only by the publish timer.
         self._published_start_id = 0
         self._last_cube_tf_ns = -1
+        self._last_seen_tf_ns = -1
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -227,6 +248,8 @@ class PerceptionNode(Node):
         self._infer_ms_sum = 0.0
         self._infer_count = 0
         self._skipped_since_log = 0
+        self._n_hidden = 0
+        self._n_moving = 0
 
         self._stop = threading.Event()
         self._worker = threading.Thread(
@@ -356,9 +379,18 @@ class PerceptionNode(Node):
             n_pose = sum(1 for r in results if r.pose is not None)
             # Track in target_frame: the camera moves with the torso, the
             # cubes do not. Without its TF the frame is shown but not tracked.
-            results_tf, frame_id = self._results_to_target(
+            results, n_hidden = mark_hidden(results, frame, **self._hidden_kw)
+            results_tf, frame_id, camera_rot = self._results_to_target(
                 results, camera_header
             )
+            moving = camera_rot is not None and self._camera_turning(
+                camera_rot, frame.stamp
+            )
+            if moving and results_tf:
+                results_tf = [replace(r, pose_trusted=False) for r in results_tf]
+            with self._stats_lock:
+                self._n_hidden += n_hidden
+                self._n_moving += int(moving)
             if results_tf is None:
                 voted = []
                 debug_results = results
@@ -460,6 +492,27 @@ class PerceptionNode(Node):
             self._published_start_id = start.start_id
 
         self._publish_known_cubes()
+        self._publish_seen_cubes(bundle)
+
+    def _publish_seen_cubes(self, bundle: _PublishBundle) -> None:
+        """
+        Publish TF <cube>_seen for the cubes seen in the frame of ``bundle``.
+
+        Stamped with that frame, once per frame: a cube out of view or under
+        the hand gets no new one, so a reader sees how old its pose is.
+        """
+        stamp = Time.from_msg(bundle.camera_header.stamp).nanoseconds
+        seen = [c for c in bundle.cubes if c.pose is not None]
+        if not seen or not bundle.frame_id or stamp <= self._last_seen_tf_ns:
+            return
+        self._last_seen_tf_ns = stamp
+        header = Header(
+            stamp=bundle.camera_header.stamp, frame_id=bundle.frame_id
+        )
+        self._tf_broadcaster.sendTransform([
+            pose_to_transform(c.pose, header, c.name + SEEN_FRAME_SUFFIX)
+            for c in seen
+        ])
 
     def _publish_known_cubes(self) -> None:
         """
@@ -583,6 +636,14 @@ class PerceptionNode(Node):
             cubes=cubes,
         )
 
+    def _camera_turning(self, rotation: np.ndarray, stamp: float) -> bool:
+        """Return True when the camera turns faster than max_camera_rot_deg_s."""
+        prev, self._prev_camera = self._prev_camera, (stamp, rotation)
+        if self._max_rot_deg_s <= 0.0 or prev is None:
+            return False
+        speed = angular_speed_deg_s(prev[1], prev[0], rotation, stamp)
+        return speed > self._max_rot_deg_s
+
     def _on_stats_timer(self) -> None:
         """Log mean inference time and dropped frames every 10 s."""
         with self._stats_lock:
@@ -590,6 +651,8 @@ class PerceptionNode(Node):
             total_ms = self._infer_ms_sum
             self._infer_count = 0
             self._infer_ms_sum = 0.0
+            hidden, moving = self._n_hidden, self._n_moving
+            self._n_hidden = self._n_moving = 0
         with self._latest_cv:
             skipped = self._skipped_since_log
             self._skipped_since_log = 0
@@ -604,6 +667,7 @@ class PerceptionNode(Node):
             f'perception stats (10 s): '
             f'infer_ms_avg={total_ms / count:.1f} '
             f'n={count} skipped_frames={skipped} '
+            f'hidden_poses={hidden} turning_frames={moving} '
             f'backend={self._backend or "-"}'
         )
 
@@ -692,28 +756,30 @@ class PerceptionNode(Node):
         self,
         results: list[SlotResult],
         camera_header: Header,
-    ) -> tuple[list[SlotResult] | None, str]:
+    ) -> tuple[list[SlotResult] | None, str, np.ndarray | None]:
         """
         Transform result poses to ``target_frame`` before tracking.
 
-        Returns ``(None, camera frame)`` when ``target_frame`` is set but its
-        TF is missing: mixing frames would split every track.
+        Returns ``(results, frame, camera rotation in target_frame)``; the
+        rotation is None without a ``target_frame``. Returns ``(None, camera
+        frame, None)`` when ``target_frame`` is set but its TF is missing:
+        mixing frames would split every track.
         """
         source = camera_header.frame_id
         target = self._target_frame
         if not target or target == source:
-            return list(results), source
+            return list(results), source, None
         tf = self._lookup(
             target, source, camera_header, 'frame not tracked'
         )
         if tf is None:
-            return None, source
+            return None, source, None
         translation, rotation = tf
         return [
             replace(r, pose=transform_pose(r.pose, translation, rotation))
             if r.pose is not None else r
             for r in results
-        ], target
+        ], target, rotation
 
 
 def _debug_results_from_tracks(

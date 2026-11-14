@@ -7,6 +7,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from g1_perception.core.config import Roi, load_label_map, load_rois
 from g1_perception.core.labels import canonical_label
 from g1_perception.core.types import (
@@ -64,7 +66,13 @@ class Pipeline:
 
     With ROIs (``rois_mode=image_roi``): one :class:`SlotResult` per ROI.
     Without ROIs (``rois_mode=none``): one result per YOLO detection
-    (``slot=None``) with geometric pose when the label is a colour.
+    (``slot=None``) with geometric pose when the label is a colour. There a
+    detection whose mask lies by more than ``duplicate_overlap`` (of the
+    smaller mask) on the mask of a higher-score detection is the same cube
+    seen twice (both colours, or the whole cube and its top face) and is
+    dropped, whatever its class (0 keeps every detection). A pose estimator
+    with ``estimate_many(frame, detections)`` gets all detections of the
+    frame at once, so that a cube's table plane leaves out the other cubes.
     """
 
     def __init__(
@@ -75,17 +83,23 @@ class Pipeline:
         label_map: Mapping[str, str],
         *,
         rois_mode: str = ROIS_MODE_IMAGE,
+        duplicate_overlap: float = 0.0,
     ) -> None:
         mode = str(rois_mode).strip().lower()
         if mode not in ROIS_MODES:
             raise ValueError(
                 f'rois_mode must be one of {ROIS_MODES}, got {rois_mode!r}'
             )
+        if not 0.0 <= duplicate_overlap <= 1.0:
+            raise ValueError(
+                f'duplicate_overlap must be in [0, 1], got {duplicate_overlap}'
+            )
         self._segmenter = segmenter
         self._pose_estimator = pose_estimator
         self._rois = sorted(rois, key=lambda r: r.slot)
         self._label_map = dict(label_map)
         self._rois_mode = mode
+        self._duplicate_overlap = float(duplicate_overlap)
 
     @property
     def rois(self) -> list[Roi]:
@@ -126,6 +140,7 @@ class Pipeline:
                 "rois_mode": "none" | "image_roi",  # default image_roi
                 "rois_path": "...",      # optional; ignored when mode=none
                 "labels_path": "...",    # optional, default config/labels.yaml
+                "duplicate_overlap": 0.5,  # optional, default 0 (off)
                 "segmenter": {"name": "...", "params": {...}},
                 "pose_estimator": {"name": "...", "params": {...}},
             }
@@ -167,6 +182,7 @@ class Pipeline:
             rois=rois,
             label_map=label_map,
             rois_mode=rois_mode,
+            duplicate_overlap=float(config.get('duplicate_overlap', 0.0)),
         )
 
     def process(self, frame: Frame) -> list[SlotResult]:
@@ -186,16 +202,41 @@ class Pipeline:
         detections: Sequence[Detection],
     ) -> list[SlotResult]:
         """One result per detection; ``slot=None``; pose for colour labels."""
-        results: list[SlotResult] = []
-        for det in detections:
-            free = Detection(
+        free = [
+            Detection(
                 slot=None,
                 label=det.label,
                 score=det.score,
                 mask=det.mask,
             )
-            results.append(self._resolve_slot(frame, None, free))
-        return results
+            for det in drop_duplicate_masks(
+                detections, self._duplicate_overlap
+            )
+        ]
+        labels = [canonical_label(det.label, self._label_map) for det in free]
+        colour = [label in COLOR_LABELS for label in labels]
+
+        estimate_many = getattr(self._pose_estimator, 'estimate_many', None)
+        if callable(estimate_many) and any(colour):
+            # Every detection leaves its mask out of the table plane.
+            poses = list(estimate_many(frame, free))
+        else:
+            poses = [
+                self._pose_estimator.estimate(frame, det) if is_colour
+                else None
+                for det, is_colour in zip(free, colour)
+            ]
+
+        return [
+            SlotResult(
+                slot=None,
+                label=label,
+                score=float(det.score),
+                detection=det,
+                pose=pose if is_colour else None,
+            )
+            for det, label, is_colour, pose in zip(free, labels, colour, poses)
+        ]
 
     def _resolve_slot(
         self,
@@ -226,6 +267,40 @@ class Pipeline:
             detection=det,
             pose=pose,
         )
+
+
+def drop_duplicate_masks(
+    detections: Sequence[Detection],
+    max_overlap: float,
+) -> list[Detection]:
+    """
+    Drop detections whose mask lies on the mask of a higher-score one.
+
+    A detection is dropped when more than ``max_overlap`` of the smaller of
+    the two masks is shared with a kept detection; detections are kept from
+    the highest score down, whatever their class. Empty masks are never
+    dropped, ``max_overlap <= 0`` keeps everything. The order is kept.
+    """
+    if max_overlap <= 0.0:
+        return list(detections)
+
+    order = sorted(
+        range(len(detections)), key=lambda i: -float(detections[i].score)
+    )
+    kept: list[int] = []
+    kept_masks: list[tuple[Any, int]] = []
+    for i in order:
+        mask = detections[i].mask
+        area = int(np.count_nonzero(mask))
+        if area > 0 and any(
+            np.count_nonzero(mask & other) > max_overlap * min(area, other_area)
+            for other, other_area in kept_masks
+        ):
+            continue
+        kept.append(i)
+        if area > 0:
+            kept_masks.append((mask, area))
+    return [detections[i] for i in sorted(kept)]
 
 
 def _best_detection_per_slot(

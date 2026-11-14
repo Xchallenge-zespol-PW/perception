@@ -40,6 +40,30 @@ class TagDetection:
     reproj_px: float
     ambiguity: float
 
+    @property
+    def distance_m(self) -> float:
+        """Camera-to-tag-centre distance (m); NaN without a pose."""
+        if self.pose is None:
+            return float('nan')
+        return float(np.linalg.norm(self.pose.position))
+
+
+def tag_summary(tags: list[TagDetection]) -> list[dict[str, float | int]]:
+    """Return ``[{'id': 7, 'distance_m': 1.832}, ...]`` of the posed tags."""
+    return [
+        {'id': t.tag_id, 'distance_m': round(t.distance_m, 3)}
+        for t in tags if t.pose is not None
+    ]
+
+
+def format_tags(tags: list[TagDetection]) -> str:
+    """Return ``"7: 1.83 m, 3: 2.41 m"`` (``"7: no pose"`` without one)."""
+    return ', '.join(
+        f'{t.tag_id}: {t.distance_m:.2f} m' if t.pose is not None
+        else f'{t.tag_id}: no pose'
+        for t in tags
+    )
+
 
 def parse_tag_ids(text: str) -> tuple[int, ...]:
     """Parse ``"0, 3,7"`` into ``(0, 3, 7)``; empty text = no filter."""

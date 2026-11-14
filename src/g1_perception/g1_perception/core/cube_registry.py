@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+import numpy as np
+
 from g1_perception.core.slot_assign import AssignmentResult
 from g1_perception.core.tracker import TrackedCube
 from g1_perception.core.types import COLOR_LABELS, Pose
@@ -21,7 +23,8 @@ class NamedCube:
     ``start_pose`` the voted pose at the start. ``pose`` is the pose seen in
     the last update, or None when the cube was not seen in it.
     ``last_pose`` is the pose it was last seen at (the start pose until it
-    is seen again), also while it is out of view. ``track_id`` is the track
+    is seen again), also while it is out of view, and ``last_seen`` the
+    frame stamp of that (s). ``track_id`` is the track
     the name is bound to. All poses are in the frame of the tracked cubes
     passed to :meth:`CubeRegistry.update`.
     """
@@ -32,6 +35,7 @@ class NamedCube:
     pose: Pose | None
     track_id: int | None
     last_pose: Pose | None = None
+    last_seen: float | None = None
 
 
 @dataclass
@@ -41,11 +45,12 @@ class _Binding:
     start_pose: Pose
     track_id: int | None
     last_pose: Pose
+    last_seen: float
 
     def named(self, pose: Pose | None) -> NamedCube:
         return NamedCube(
             self.name, self.label, self.start_pose, pose, self.track_id,
-            self.last_pose,
+            self.last_pose, self.last_seen,
         )
 
 
@@ -60,16 +65,32 @@ class CubeRegistry:
     place ``n`` becomes the cube ``<name_prefix>n`` with its colour and
     start pose, and :attr:`start_id` grows by one.
 
-    While frozen, a name follows its track. A name whose track was not seen
-    in an update (occluded, dropped by the tracker, or seen with the other
-    colour) is given to an unnamed track seen in that update whose
-    coordinate along ``axis`` (the line of the cubes) is within
-    ``reid_gate_m`` of the start one. Cubes are pushed across that line, so
-    the coordinate barely changes, while neighbours are a cube size away.
-    Colour only vetoes a match once the track has voted it, because a new
-    track is ``uncertain`` until it has enough votes. Every name keeps the
-    pose it was last seen at (:meth:`known`), so a cube out of view (the
-    camera turned away with the torso) still has a position.
+    While frozen, a name follows its track. It keeps the track while the
+    tracker still has it and saw it within ``reid_hold_s``: a track missed
+    for a frame or two (occlusion, a missed detection) does not hand the name
+    to another track, which made a cube at rest flip between two tracks.
+
+    A name whose track is lost is given to an unnamed track of the update
+    when the track:
+
+    - has voted the colour of the name (``reid_require_color``) and lived
+      ``reid_min_frames`` frames, so a hand or a ghost seen for a moment
+      takes no name;
+    - stands within ``reid_max_dz_m`` of the height the cube was last seen
+      at, so a detection above the table takes no name;
+    - is within ``reid_near_m`` (in the plane, x and y) of where the cube was
+      last seen, or, for a cube pushed while out of view, within
+      ``reid_gate_m`` of it along the line of the cubes (pushes go across it)
+      and not within ``reid_near_m`` of where another cube was last seen,
+      which is that cube's place, not this one's. The line is the main axis
+      of the start poses in the plane, ``axis`` only for a layout too short
+      to give one: with a robot turned a few degrees to the table, a cube
+      pushed 30 cm across the line moves centimetres along ``axis``.
+
+    Matches in the plane win over matches along the line. Every name keeps
+    the pose it was last seen at (:meth:`known`) and the stamp of that
+    (``last_seen``), so a cube out of view (the camera turned away with the
+    torso) still has a position, and readers can tell it is not fresh.
 
     A stamp older than the previous one (bag played with ``--loop``) makes
     :class:`CubeTracker` restart its track ids, so every name then forgets
@@ -83,6 +104,11 @@ class CubeRegistry:
         name_prefix: str = 'cube_',
         latch_s: float = 1.0,
         reid_gate_m: float = 0.025,
+        reid_near_m: float = 0.03,
+        reid_max_dz_m: float = 0.04,
+        reid_hold_s: float = 0.5,
+        reid_min_frames: int = 3,
+        reid_require_color: bool = True,
     ) -> None:
         axis_key = str(axis).strip().lower()
         if axis_key not in _AXIS_INDEX:
@@ -93,11 +119,28 @@ class CubeRegistry:
             raise ValueError(f'latch_s must be >= 0, got {latch_s}')
         if reid_gate_m <= 0.0:
             raise ValueError(f'reid_gate_m must be > 0, got {reid_gate_m}')
+        if reid_near_m <= 0.0 or reid_max_dz_m <= 0.0:
+            raise ValueError(
+                'reid_near_m and reid_max_dz_m must be > 0, got '
+                f'{reid_near_m} and {reid_max_dz_m}'
+            )
+        if reid_hold_s < 0.0 or reid_min_frames < 0:
+            raise ValueError(
+                'reid_hold_s and reid_min_frames must be >= 0, got '
+                f'{reid_hold_s} and {reid_min_frames}'
+            )
         self._axis = _AXIS_INDEX[axis_key]
         self.name_prefix = str(name_prefix)
         self.latch_s = float(latch_s)
         self.reid_gate_m = float(reid_gate_m)
+        self.reid_near_m = float(reid_near_m)
+        self.reid_max_dz_m = float(reid_max_dz_m)
+        self.reid_hold_s = float(reid_hold_s)
+        self.reid_min_frames = int(reid_min_frames)
+        self.reid_require_color = bool(reid_require_color)
         self._bindings: list[_Binding] = []
+        # Direction of the line of the cubes in the plane (unit x, y).
+        self._line = np.eye(3)[self._axis][:2]
         self._candidate: tuple[tuple[int, int | None, str], ...] | None = None
         self._candidate_since = 0.0
         self._latest: float | None = None
@@ -151,7 +194,7 @@ class CubeRegistry:
             if not self._try_latch(assignment, stamp):
                 return []
             return [b.named(b.start_pose) for b in self._bindings]
-        return self._follow(tracked)
+        return self._follow(tracked, stamp)
 
     def _try_latch(self, assignment: AssignmentResult, stamp: float) -> bool:
         """Freeze the layout once it has been stable for latch_s."""
@@ -177,43 +220,65 @@ class CubeRegistry:
                 start_pose=s.pose,  # type: ignore[arg-type]
                 track_id=s.track_id,
                 last_pose=s.pose,  # type: ignore[arg-type]
+                last_seen=stamp,
             )
             for s in slots
         ]
+        self._line = _line_direction(
+            [s.pose.position for s in slots], np.eye(3)[self._axis][:2]
+        )
         self._start_id += 1
         self._candidate = None
         return True
 
-    def _follow(self, tracked: Sequence[TrackedCube]) -> list[NamedCube]:
+    def _follow(
+        self, tracked: Sequence[TrackedCube], stamp: float,
+    ) -> list[NamedCube]:
         """Update the bound tracks and give lost names to new tracks."""
+        alive = {t.track_id: t for t in tracked}
         visible = {
             t.track_id: t for t in tracked
             if t.missed == 0 and t.pose is not None
         }
         seen: dict[str, TrackedCube] = {}
+        held: set[str] = set()
         for binding in self._bindings:
             track = visible.get(binding.track_id)  # type: ignore[arg-type]
-            if track is not None and not _contradicts(track, binding.label):
+            if (
+                track is not None and not _contradicts(track, binding.label)
+                and self._at_height(track, binding)
+            ):
                 seen[binding.name] = track
+                continue
+            # Missed for a moment: the name stays with its track.
+            track = alive.get(binding.track_id)  # type: ignore[arg-type]
+            if (
+                track is not None and track.missed > 0
+                and not _contradicts(track, binding.label)
+                and stamp - track.last_seen <= self.reid_hold_s
+            ):
+                held.add(binding.name)
 
         used = {t.track_id for t in seen.values()}
-        free = [t for tid, t in visible.items() if tid not in used]
-        candidates: list[tuple[float, int, int]] = []
+        used |= {
+            b.track_id for b in self._bindings if b.name in held
+        }
+        free = [
+            t for tid, t in visible.items()
+            if tid not in used and t.n_frames >= self.reid_min_frames
+        ]
+        candidates: list[tuple[int, float, int, int]] = []
         for b_index, binding in enumerate(self._bindings):
-            if binding.name in seen:
+            if binding.name in seen or binding.name in held:
                 continue
-            start = float(binding.start_pose.position[self._axis])
             for t_index, track in enumerate(free):
-                if _contradicts(track, binding.label):
-                    continue
-                assert track.pose is not None
-                offset = abs(float(track.pose.position[self._axis]) - start)
-                if offset <= self.reid_gate_m:
-                    candidates.append((offset, b_index, t_index))
+                cost = self._match_cost(track, b_index)
+                if cost is not None:
+                    candidates.append((*cost, b_index, t_index))
 
         candidates.sort()
         taken: set[int] = set()
-        for _offset, b_index, t_index in candidates:
+        for _kind, _distance, b_index, t_index in candidates:
             binding = self._bindings[b_index]
             if binding.name in seen or t_index in taken:
                 continue
@@ -226,8 +291,79 @@ class CubeRegistry:
             pose = seen[binding.name].pose if binding.name in seen else None
             if pose is not None:
                 binding.last_pose = pose
+                binding.last_seen = stamp
             cubes.append(binding.named(pose))
         return cubes
+
+    def _at_height(self, track: TrackedCube, binding: _Binding) -> bool:
+        """Return True when the track stands at the cube's last height."""
+        assert track.pose is not None
+        dz = float(track.pose.position[2]) - float(binding.last_pose.position[2])
+        return abs(dz) <= self.reid_max_dz_m
+
+    def _match_cost(
+        self, track: TrackedCube, b_index: int,
+    ) -> tuple[int, float] | None:
+        """
+        Return how well a free track fits a lost name, None when it does not.
+
+        (0, distance) for a track near the last pose in the plane, (1, offset)
+        for one along the line of the cubes (pushed out of view).
+        """
+        binding = self._bindings[b_index]
+        assert track.pose is not None
+        if self.reid_require_color:
+            if track.label != binding.label:
+                return None
+        elif _contradicts(track, binding.label):
+            return None
+        if not self._at_height(track, binding):
+            return None
+
+        position = np.asarray(track.pose.position, dtype=np.float64)
+        distance = _planar_distance(position, binding.last_pose.position)
+        if distance <= self.reid_near_m:
+            return (0, distance)
+
+        offset = abs(float(np.dot(
+            position[:2]
+            - np.asarray(binding.last_pose.position, dtype=np.float64)[:2],
+            self._line,
+        )))
+        if offset > self.reid_gate_m:
+            return None
+        # Where another cube was last seen is that cube's place.
+        for other_index, other in enumerate(self._bindings):
+            if other_index == b_index:
+                continue
+            if _planar_distance(position, other.last_pose.position) <= self.reid_near_m:
+                return None
+        return (1, offset)
+
+
+def _line_direction(positions, fallback: np.ndarray) -> np.ndarray:
+    """
+    Return the main axis (x, y) of ``positions``, or ``fallback``.
+
+    ``fallback`` is the axis for fewer than two positions or an RMS spread
+    under 2 cm; the result points the same way as ``fallback``.
+    """
+    points = np.asarray([[float(p[0]), float(p[1])] for p in positions])
+    if len(points) < 2:
+        return np.asarray(fallback, dtype=np.float64)
+    centred = points - points.mean(axis=0)
+    _, singular, vt = np.linalg.svd(centred, full_matrices=False)
+    if singular[0] / np.sqrt(len(points)) < 0.02:
+        return np.asarray(fallback, dtype=np.float64)
+    line = vt[0]
+    return line if float(np.dot(line, fallback)) >= 0.0 else -line
+
+
+def _planar_distance(first, second) -> float:
+    """Return the distance in the plane (x, y) of two positions."""
+    return float(np.hypot(
+        float(first[0]) - float(second[0]), float(first[1]) - float(second[1])
+    ))
 
 
 def _contradicts(track: TrackedCube, label: str) -> bool:

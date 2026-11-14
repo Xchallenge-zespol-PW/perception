@@ -34,16 +34,23 @@ perception_node:
     rois_path: ""
     hsv_path: ""
     labels_path: ""
+    duplicate_overlap: 0.5        # mask over half on a higher-score one = same cube, dropped
 
-    # Pose estimation
+    # Pose estimation (one table plane per frame, all masks cut out)
     cube_size_m: 0.05
     margin_px: 20
     z_min_m: 0.1
     z_max_m: 2.0
-    min_height_m: 0.01                # tape is flat: points must stand above the table
+    min_height_m: 0.00             # tape is flat: points must stand above the table
     min_above_ratio: 0.5
     footprint_min_m: 0.0
     footprint_max_m: 0.0
+    # Pose update gates (rois_mode none): a cut-off / hidden cube, or every cube
+    # while the camera turns fast, keeps its track and colour votes but not
+    # the pose of that frame. 0 disables each.
+    pose_border_px: 3                 # mask within this of the image edge = cut off
+    min_visible_ratio: 0.45           # mask area / cube face at its depth; whole cubes 0.47..1.7 (p1 0.61)
+    max_camera_rot_deg_s: 20.0        # camera rotation in target_frame between frames
     # pose_estimator: pnp (YOLO-pose corners; see docs/pose_pnp.md)
     kpt_min_conf: 0.5             # min confidence of every corner
     pnp_max_reproj_px: 2.0        # max PnP reprojection error
@@ -60,7 +67,8 @@ perception_node:
     vote_window: 100
     vote_min_ratio: 0.7
     vote_min_frames: 0
-    match_dist_m: 0.03
+    match_dist_m: 0.03                # in x, y with match_max_dz_m (0 = in 3D)
+    match_max_dz_m: 0.06              # a wrong height in one frame starts no new track
     max_missed_s: 1.0
     # Slots and the start layout count only tracks seen within fresh_s:
     # a split track (new id after a jump) stays alive max_missed_s.
@@ -81,6 +89,17 @@ perception_node:
     cube_name_prefix: cube_
     start_frame: ""
     latch_s: 1.0
+    # A lost cube is found again by a track that voted its colour, lived
+    # reid_min_frames frames and stands within reid_max_dz_m of its last height:
+    # within reid_near_m of its last pose (x, y), or, pushed out of view, within
+    # reid_gate_m of it along the line of the start cubes but not at the last
+    # pose of another cube.
+    # A track missed for up to reid_hold_s keeps its name (no flipping at rest).
     reid_gate_m: 0.025
+    reid_near_m: 0.03
+    reid_max_dz_m: 0.04               # the hand over the table is no cube
+    reid_hold_s: 0.5
+    reid_min_frames: 3
+    reid_require_color: true
 
     publish_rate_hz: 5.0

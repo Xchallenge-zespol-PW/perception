@@ -32,6 +32,7 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'rois_path': '',
     'hsv_path': '',
     'labels_path': '',
+    'duplicate_overlap': 0.5,
     'cube_size_m': 0.05,
     'margin_px': 20,
     'z_min_m': 0.1,
@@ -46,6 +47,9 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'pnp_depth_diff_ref_m': 0.6,
     'pnp_max_normal_deg': 20.0,
     'pnp_fallback': 'geometric',
+    'pose_border_px': 0,
+    'min_visible_ratio': 0.0,
+    'max_camera_rot_deg_s': 0.0,
     'vote_window': 10,
     'vote_min_ratio': 0.7,
     'vote_min_frames': 0,
@@ -54,6 +58,7 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'max_missed_s': 0.0,
     'fresh_s': 0.0,
     'match_dist_m': 0.03,
+    'match_max_dz_m': 0.0,
     'max_missed': 5,
     'slot_axis': 'y',
     'expected_count': 4,
@@ -65,6 +70,11 @@ DEFAULT_PARAMS: dict[str, Any] = {
     'start_frame': '',
     'latch_s': 1.0,
     'reid_gate_m': 0.025,
+    'reid_near_m': 0.03,
+    'reid_max_dz_m': 0.04,
+    'reid_hold_s': 0.5,
+    'reid_min_frames': 3,
+    'reid_require_color': True,
     'publish_rate_hz': 5.0,
     'sync_queue_size': 10,
     'sync_slop_s': 0.05,
@@ -111,6 +121,7 @@ def build_pipeline_config(params: Mapping[str, Any]) -> dict[str, Any]:
 
     config: dict[str, Any] = {
         'rois_mode': str(params.get('rois_mode', ROIS_MODE_IMAGE)),
+        'duplicate_overlap': float(params.get('duplicate_overlap', 0.0)),
         'segmenter': {
             'name': seg_name,
             'params': stage_params(get_registered(seg_name), seg_candidates),
@@ -147,11 +158,17 @@ def voter_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def tracker_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
-    """Return :class:`CubeTracker` kwargs from flat node parameters."""
+    """
+    Return :class:`CubeTracker` kwargs from flat node parameters.
+
+    ``match_max_dz_m <= 0`` matches by 3D distance.
+    """
     vk = voter_kwargs(params)
     max_missed_s = float(params.get('max_missed_s', 0.0))
+    match_max_dz_m = float(params.get('match_max_dz_m', 0.0))
     return {
         'match_dist_m': float(params['match_dist_m']),
+        'match_max_dz_m': match_max_dz_m if match_max_dz_m > 0.0 else None,
         'max_missed': int(params['max_missed']),
         'max_missed_s': max_missed_s if max_missed_s > 0.0 else None,
         'vote_window': vk['window'],
@@ -180,6 +197,11 @@ def registry_kwargs(params: Mapping[str, Any]) -> dict[str, Any]:
         'name_prefix': str(params['cube_name_prefix']),
         'latch_s': float(params['latch_s']),
         'reid_gate_m': float(params['reid_gate_m']),
+        'reid_near_m': float(params['reid_near_m']),
+        'reid_max_dz_m': float(params['reid_max_dz_m']),
+        'reid_hold_s': float(params['reid_hold_s']),
+        'reid_min_frames': int(params['reid_min_frames']),
+        'reid_require_color': bool(params['reid_require_color']),
     }
 
 
