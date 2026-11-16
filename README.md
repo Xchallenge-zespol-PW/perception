@@ -4,7 +4,7 @@ Real-time RGB-D perception for **Unitree G1 EDU**: detect red/green ~5 cm cubes 
 
 `ROS 2 Humble · YOLO-seg · RealSense · Jetson TensorRT`
 
-Built for the **X-Challenge** team stack (cube-sorting exercise). Core vision logic is ROS-free; `perception_node` is a thin rclpy wrapper.
+Built for the **X-Challenge** team stack (cube-sorting exercise). Runs as a **ROS 2 Humble** package (`perception_node` / launch) that syncs RealSense RGB-D, publishes detections and TF for the cube-sorting controller; the CV pipeline itself is kept as a separate, testable library behind that node.
 
 ## Demo
 
