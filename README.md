@@ -8,13 +8,9 @@ Built for the **X-Challenge** team stack (cube-sorting exercise). Core vision lo
 
 ## Demo
 
-TODO: *Add `docs/media/demo/sorting_demo.gif` (5–10 s cube-sorting clip from competition footage).*
-
-TODO: *Add `docs/media/demo/robot.jpg` (clean photo of the G1 / setup).*
-
 ![Cube sorting demo](docs/media/demo/sorting_demo.gif)
 
-![Unitree G1](docs/media/demo/robot.jpg)
+![Unitree G1](docs/media/demo/robot.png)
 
 ## Highlights
 
@@ -33,14 +29,12 @@ Measured on the robot (Jetson Orin NX companion PC):
 | TensorRT `.engine` | GPU | **30.9 ms / frame** |
 | ONNX | CPU | **1494.3 ms / frame** |
 
-Training curves / mAP (Ultralytics export from the training machine):
+Training curves / mAP:
 
 | Metric | Value |
 |--------|-------|
-| Segmentation mAP | TODO: *Paste mAP from Ultralytics on the training host* |
-| Notes | TODO: *Optional short note on dataset / epochs* |
-
-TODO: *Copy Ultralytics `results.png` to `docs/media/training/results.png`.*
+| Segmentation mAP | mAP50 = 0.988, mAP50-95 = 0.738 |
+| Notes | YOLO26n-seg, dataset v5 (620 train / 156 val), 165 epochs (early stop, best @ 158), augmentations |
 
 ![Training results](docs/media/training/results.png)
 
