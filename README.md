@@ -14,7 +14,8 @@ Built for the **X-Challenge** team stack (cube-sorting exercise). Runs as a **RO
 
 ## Highlights
 
-- **YOLO segmentation** + geometric / PnP pose on aligned RealSense depth
+- **ROS 2 node**: synced RealSense RGB-D → `/perception/cubes` (`vision_msgs`) + TF for the cube-sorting controller
+- **YOLO segmentation** + geometric / PnP pose on aligned depth
 - **Temporal voting** and **3D tracking**, with slot assignment along the start line
 - **Exercise 1**: freeze start layout, stable `cube_N` names, re-ID after occlusion / push
 - **Jetson deploy**: TensorRT `.engine` on GPU, ONNX CPU fallback
@@ -38,10 +39,14 @@ Training curves / mAP:
 
 ![Training results](docs/media/training/results.png)
 
+![Confusion matrix](docs/media/training/confusion_matrix.png)
+
+![Mask PR curve](docs/media/training/MaskPR_curve.png)
+
 ## Architecture
 
 ```text
-Frame (RGB + depth + K)
+RealSense RGB-D + camera_info  (ROS 2)
         │
         ▼
    Segmenter  →  list[Detection]     # hsv | yolo_seg
@@ -51,6 +56,9 @@ Frame (RGB + depth + K)
         │
         ▼
  Slot / track results                # red | green | empty | uncertain
+        │
+        ▼
+ perception_node  →  /perception/cubes + TF (+ debug image)
 ```
 
 Details: [docs/architecture.md](docs/architecture.md).
@@ -69,7 +77,7 @@ cd /ws && ros2 launch g1_perception perception.launch.py
 ros2 launch g1_perception perception.launch.py config:=params_robot.yaml
 ```
 
-Environment notes (NumPy &lt; 2, tests, `xchallenge_msgs`): [docs/environment.md](docs/environment.md).
+Environment notes (NumPy < 2, tests, `xchallenge_msgs`): [docs/environment.md](docs/environment.md).
 
 ## Repository layout
 

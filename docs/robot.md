@@ -2,6 +2,8 @@
 
 Deploy `g1_perception` on the G1 companion PC (Jetson Orin NX, JetPack 5.1.1, ROS 2 Humble). Prefer TensorRT `.engine` on GPU; fall back to ONNX on CPU. Camera: RealSense D435i at 640×480 @ 15 Hz.
 
+**Path note:** after `deploy_robot.sh`, code on the robot lives under `/ws/src/perception/` (tools at `/ws/src/perception/tools/...`). In this repository the same scripts are at `/ws/tools/` and the package at `/ws/src/g1_perception/`.
+
 ## Hardware and system
 
 | Item | Value |

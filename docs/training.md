@@ -2,7 +2,7 @@
 
 End-to-end flow from RealSense bags → CVAT labels → `cubes_seg` / `cubes_pose` → Ultralytics train → export `.onnx` / TensorRT `.engine` → robot. Training usually runs on a GPU host (e.g. Colab); the laptop handles conversion and CPU benches.
 
-Flow for both segmenters: `yolo_seg` (full-cube mask) and `yolo_pose` (4 top-face corners; conventions in [pose_pnp.md](pose_pnp.md) if present). One labeling pass produces both datasets.
+Flow for both segmenters: `yolo_seg` (full-cube mask) and `yolo_pose` (4 top-face corners `c0..c3`). One labeling pass produces both datasets.
 
 ```text
 record_cubes.sh → extract_frames.py → CVAT (polygon + 4 corners)
@@ -15,7 +15,7 @@ Laptop has no CUDA (AMD), so training runs in Colab; on the laptop: conversion, 
 
 ## 0. Before training: will YOLO26 run on the Jetson?
 
-In the humble container on the robot, after enabling GPU:
+In the humble container on the robot, after enabling GPU. Paths like `/ws/src/perception/...` are the **on-robot tree after** `deploy_robot.sh` (this repo keeps tools at `/ws/tools` and the package at `/ws/src/g1_perception`).
 
 ```bash
 YOLO_AUTOINSTALL=false python3 /ws/src/perception/tools/jetson_gpu_check.py \
@@ -46,7 +46,7 @@ Per cube:
 | **Polygon** | outline of the whole visible cube (top + sides) → seg mask and pose box |
 | **Points** (4 points) or **Skeleton** with 4 points | **top-face** corners, any order |
 
-- Point order does not matter: the converter sorts them to `c0..c3` (visually clockwise, `c0` = lowest; if `v` differs by &lt; 3 px, the righter one).
+- Point order does not matter: the converter sorts them to `c0..c3` (visually clockwise, `c0` = lowest; if `v` differs by < 3 px, the righter one).
 - Points attach to a polygon via a shared **group** (Ctrl+G) or, without a group, to the smallest polygon containing their centroid. Group touching cubes.
 - Occluded corner whose location is still known: keep the point and set `occluded` (visibility 1). Impossible corner: cube without points (skeleton: `outside`) — pose gets all zeros.
 - Cube whose top face is not visible: polygon only.
@@ -80,8 +80,6 @@ python3 tools/train_yolo.py --task pose --model yolo26s-pose.pt --device 0
 - Defaults: `yolo26n-seg.pt` / `yolo26n-pose.pt`, 100 epochs, `imgsz=640`, `hsv_h=0`; pose with `fliplr=0` (flip breaks the `c0` rule).
 - `ultralytics==8.4.191` from `deploy/constraints.txt` — same version in Colab, on the laptop, and on the robot.
 - Weights: `runs/seg/cubes/weights/best.pt`, `runs/pose/cubes_pose/weights/best.pt`.
-
-TODO: *Copy Ultralytics `results.png` (and optional PR / confusion plots) to `docs/media/training/` and paste mAP into the root README Results table.*
 
 ## 5. Export and deploy
 

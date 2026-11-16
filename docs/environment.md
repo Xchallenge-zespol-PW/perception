@@ -18,7 +18,7 @@ cp -r <X-Challenge workspace>/src/xchallenge_msgs src/
 
 Docker image: [`docker/Dockerfile`](../docker/Dockerfile) (ROS Humble + RealSense + OpenCV + rosbags + ultralytics). Pip pins: [`docker/constraints.txt`](../docker/constraints.txt). Devcontainer: [`.devcontainer/`](../.devcontainer/) (`/ws`, `/bags`, host network, udev).
 
-## NumPy &lt; 2 (`cv_bridge` requirement)
+## NumPy < 2 (`cv_bridge` requirement)
 
 Humble’s apt `cv_bridge` is built against NumPy 1.x. With NumPy 2, import fails with `AttributeError: _ARRAY_API not found` (“A module that was compiled using NumPy 1.x cannot be run in NumPy 2…”), so the ROS node will not start. Typical cause: `pip install ultralytics` (e.g. `--user`) without constraints pulls NumPy 2.x and `opencv-python` ≥ 4.12 (which itself needs NumPy 2); packages in `~/.local` then shadow the image versions.
 

@@ -1,11 +1,11 @@
 # Architecture
 
-RGB-D cube perception: detect a cube at known table slots (red / green / empty, ~5 cm cube) and estimate its pose (3D position + orientation). Core logic (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) does not import ROS; ROS 2 nodes are a thin wrapper.
+RGB-D cube perception: detect a cube at known table slots (red / green / empty, ~5 cm cube) and estimate its pose (3D position + orientation). The stack runs as a **ROS 2** package (`perception_node`, launch, topics, TF). The CV library (`core/`, `segmenters/`, `pose/`, `pipeline`, `node_config`) stays importable without `rclpy` so it can be unit-tested and run offline behind that node.
 
 ## Pipeline
 
 ```text
-Frame (RGB + depth + K)
+RealSense RGB-D + camera_info  (ROS 2)
         │
         ▼
    Segmenter  →  list[Detection]     # "hsv" | "yolo_seg"
@@ -15,6 +15,9 @@ Frame (RGB + depth + K)
         │
         ▼
  list[SlotResult]                    # red | green | empty | uncertain
+        │
+        ▼
+ perception_node  →  /perception/cubes + TF (+ debug image)
 ```
 
 | Layer | What it provides |
@@ -35,12 +38,12 @@ Frame (RGB + depth + K)
 | `pipeline` | `@register`, `Pipeline.from_config` / `process` (`rois_mode`) |
 | `segmenters/` | `hsv`, `yolo_seg` |
 | `pose/` | `centroid`, `geometric` |
-| `node_config` | node params → `Pipeline` / `SlotVoter` config (no ROS) |
+| `node_config` | node params → `Pipeline` / `SlotVoter` config (no `rclpy` import) |
 | `ros_conversions` | `VotedSlot` → `vision_msgs/Detection3DArray` |
-| `perception_node` | thin rclpy node (sync, cv_bridge, TF, publish) |
+| `perception_node` | ROS 2 node (rclpy): RGB-D sync, cv_bridge, TF, publish |
 | `tools/` | record → frames → calibrate → autolabel → train |
 
-Planned: `evaluate`, FoundationPose. TensorRT export (`.engine`) is already supported in the loader.
+TensorRT export (`.engine`) is supported in the model loader.
 
 ## Package layout
 
@@ -159,7 +162,7 @@ voted = voter.update(pipe.process(frame), frame.stamp)
 
 Per slot over the last `window` frames, or with `window_s` over votes not older than `window_s` from the newest frame stamp (requires `min_votes`; a backward stamp, e.g. `ros2 bag play --loop`, clears history):
 
-- label = majority; `uncertain` when share &lt; `min_ratio`, tie, too few frames (&lt; `min_frames`), or winner is `uncertain`; `uncertain` frames count in the denominator;
+- label = majority; `uncertain` when share < `min_ratio`, tie, too few frames (< `min_frames`), or winner is `uncertain`; `uncertain` frames count in the denominator;
 - for `red` / `green`: position = per-axis median of frames matching the winner; yaw = median with 90° symmetry (circular mean of `4·yaw` as reference, residuals wrapped to ±45°, then median); Z axis = mean table normal;
 - `VotedSlot`: `slot`, `label`, `score` (winner share), `n_frames`, `pose`, `yaw_deg` ∈ [0, 90), `yaw_consistency` ∈ [0, 1] (1 = consistent angles).
 
@@ -168,7 +171,7 @@ Per slot over the last `window` frames, or with `window_s` over votes not older 
 | Name | Module | Behavior |
 |------|--------|----------|
 | `hsv` | `segmenters/hsv.py` | Per ROI: HSV red/green masks, erode, fraction ≥ `min_frac` → `red`/`green`; below threshold → no detection (→ `empty`) |
-| `yolo_seg` | `segmenters/yolo_seg.py` | YOLO-seg (`.pt`/`.onnx`/`.engine`, load via `segmenters/yolo_backend.py` with CPU fallback; `.engine` without torch via `trt_runtime.py` + `yolo_decode.py`), `retina_masks=True`, slot when mask∩ROI coverage &gt; 50%; keeps model class name; optional `verify_hsv` (HSV mismatch → `uncertain`) |
+| `yolo_seg` | `segmenters/yolo_seg.py` | YOLO-seg (`.pt`/`.onnx`/`.engine`, load via `segmenters/yolo_backend.py` with CPU fallback; `.engine` without torch via `trt_runtime.py` + `yolo_decode.py`), `retina_masks=True`, slot when mask∩ROI coverage > 50%; keeps model class name; optional `verify_hsv` (HSV mismatch → `uncertain`) |
 
 `ultralytics` is imported only inside `YoloSegSegmenter` (optional dependency).
 
@@ -195,6 +198,6 @@ Per slot over the last `window` frames, or with `window_s` over votes not older 
 | `test_dataset.py` | `load_frame` |
 | `test_config.py` | ROI / HSV YAML |
 | `test_hsv_segmenter.py` | HSV segmenter (synthetics) |
-| `test_pose_geometry.py` | geometry + geometric (&lt;5 mm, yaw &lt;2°, 2 mm noise) |
+| `test_pose_geometry.py` | geometry + geometric (<5 mm, yaw <2°, 2 mm noise) |
 | `test_yolo_seg.py` | slots / `verify_hsv` (no ultralytics) |
 | `test_autolabel_helpers.py` | bag split, YOLO polygon (no GPU) |
