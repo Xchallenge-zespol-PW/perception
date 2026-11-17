@@ -3,7 +3,7 @@
 Train a YOLO seg or pose model on the cube datasets (Ultralytics).
 
 ``--task seg`` (default) trains on ``datasets/cubes_seg``, ``--task pose``
-on ``datasets/cubes_pose`` (4 top-face corners, ``docs/pose_pnp.md``).
+on ``datasets/cubes_pose`` (4 top-face corners ``c0..c3``; see ``docs/training.md``).
 Colour is the class, so hue augmentation is off (``hsv_h=0``); pose also
 trains without horizontal flips (``fliplr=0``) so corner order stays
 canonical. Dataset paths are resolved to absolute ones before training
@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if args.task == 'pose' and args.fliplr > 0.0:
         print(
-            'WARN: fliplr > 0 breaks the c0 rule after flips (docs/pose_pnp.md)',
+            'WARN: fliplr > 0 breaks the c0 rule after flips (docs/training.md)',
             file=sys.stderr,
         )
 

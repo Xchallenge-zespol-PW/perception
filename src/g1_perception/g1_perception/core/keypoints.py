@@ -15,7 +15,7 @@ def order_top_corners(
     tie_px: float = C0_TIE_PX,
 ) -> NDArray[np.float64]:
     """
-    Return the 4 corners as ``c0..c3`` (see ``docs/pose_pnp.md``).
+    Return the 4 corners as ``c0..c3`` (clockwise, ``c0`` = lowest; see ``docs/training.md``).
 
     The corners are sorted visually clockwise on the image (``v`` down),
     starting at ``c0`` = the corner with the largest ``v``. When another

@@ -45,7 +45,7 @@ class PnpPoseEstimator:
     """
     Orientation from the 4 top-face corners (IPPE_SQUARE), position from depth.
 
-    Steps (``docs/pose_pnp.md``): table plane from depth around the cube,
+    Steps: table plane from depth around the cube,
     corners ``c0..c3`` → PnP, solution closest to the table normal, yaw on
     the table; top-face centre = median depth point inside the eroded
     corner quad, moved ``size / 2`` toward the table. The PnP path is

@@ -7,7 +7,7 @@ the whole visible cube and the 4 **top-face corners** as a ``points``
 shape (4 points) or a 4-point ``skeleton``, in any order. Corners are
 paired with the polygon by ``group_id`` or, without it, by the smallest
 polygon containing their centre. Corners are re-ordered to ``c0..c3``
-(``docs/pose_pnp.md``), so the labelling order does not matter.
+(clockwise ``c0..c3``, ``c0`` = lowest; see ``docs/training.md``), so the labelling order does not matter.
 
 Output (split by recording = first directory of the image name)::
 

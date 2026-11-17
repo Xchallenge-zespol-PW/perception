@@ -49,7 +49,7 @@ def top_face_model(size: float) -> NDArray[np.float64]:
     Square of side ``size`` in the order required by ``SOLVEPNP_IPPE_SQUARE``.
 
     ``[-s, s, 0], [s, s, 0], [s, -s, 0], [-s, -s, 0]`` with ``s = size / 2``;
-    index ``i`` corresponds to image corner ``c_i`` (``docs/pose_pnp.md``).
+    index ``i`` corresponds to image corner ``c_i`` (clockwise ``c0..c3``).
     """
     s = float(size) / 2.0
     return np.array(
@@ -184,7 +184,7 @@ def pose_on_table(
     Cube :class:`Pose`: ``+Z`` = table normal, yaw from PnP, centre of body.
 
     ``top_center`` (e.g. from depth) replaces the PnP translation, which is
-    noisy for small cubes (``docs/pose_pnp.md``).
+    noisy for small cubes.
     """
     n = np.asarray(table_normal, dtype=np.float64)
     n = n / np.linalg.norm(n)

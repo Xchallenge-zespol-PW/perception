@@ -26,10 +26,10 @@ source /opt/ros/humble/setup.bash && source install/setup.bash
 ros2 launch g1_perception perception.launch.py
 # robot:
 ros2 launch g1_perception perception.launch.py config:=params_robot.yaml
-# override ROI without editing YAML:
+# override ROI without editing YAML (path to a local rois.yaml):
 ros2 run g1_perception perception_node --ros-args \
   --params-file install/g1_perception/share/g1_perception/config/params_laptop.yaml \
-  -p rois_path:=src/g1_perception/config/rois_RGGR_niskie_184542.yaml
+  -p rois_path:=/path/to/rois.yaml
 ```
 
 Terminal 3 — inspect:

@@ -22,8 +22,8 @@ setup(
     zip_safe=True,
     maintainer='dev',
     maintainer_email='xowski22@gmail.com',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    description='RGB-D cube perception for Unitree G1 EDU (ROS 2 Humble)',
+    license='MIT',
     extras_require={
         'test': [
             'pytest',

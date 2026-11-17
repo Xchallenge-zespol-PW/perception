@@ -42,7 +42,7 @@ class Detection:
     pipeline), ``score`` is confidence in [0, 1], ``mask`` is an HxW bool
     array. ``keypoints`` is an optional Kx3 array ``(u, v, conf)`` in
     pixels: for ``yolo_pose`` the 4 top-face corners ``c0..c3`` with
-    per-corner confidence (``docs/pose_pnp.md``); None for segmenters
+    per-corner confidence (``c0..c3`` top-face order); None for segmenters
     without keypoints.
     """
 

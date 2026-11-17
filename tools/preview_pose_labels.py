@@ -3,7 +3,7 @@
 Check and draw YOLO-pose cube labels (box + numbered corners c0..c3).
 
 Reports labels whose corners are not in the canonical order from
-``docs/pose_pnp.md`` (visually clockwise, ``c0`` = lowest corner) and
+``docs/training.md`` (visually clockwise, ``c0`` = lowest corner) and
 writes preview images for a manual look.
 
 Example::

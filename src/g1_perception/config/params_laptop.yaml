@@ -51,7 +51,7 @@ perception_node:
     pose_border_px: 3                 # mask within this of the image edge = cut off
     min_visible_ratio: 0.45           # mask area / cube face at its depth; whole cubes 0.47..1.7 (p1 0.61)
     max_camera_rot_deg_s: 20.0        # camera rotation in target_frame between frames
-    # pose_estimator: pnp (YOLO-pose corners; see docs/pose_pnp.md)
+    # pose_estimator: pnp (YOLO-pose corners c0..c3; see docs/training.md)
     kpt_min_conf: 0.5             # min confidence of every corner
     pnp_max_reproj_px: 2.0        # max PnP reprojection error
     pnp_max_depth_diff_m: 0.03    # max PnP vs depth distance at pnp_depth_diff_ref_m,

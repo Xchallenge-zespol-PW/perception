@@ -3,9 +3,9 @@
 <package format="3">
   <name>g1_perception</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>RGB-D cube perception for Unitree G1 EDU (ROS 2 Humble)</description>
   <maintainer email="xowski22@gmail.com">dev</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
 
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
