@@ -82,7 +82,7 @@ Environment notes (NumPy < 2, tests, `xchallenge_msgs`): [docs/environment.md](d
 ## Repository layout
 
 ```text
-├── src/g1_perception/     # ament_python package (core + ROS nodes)
+├── src/g1_perception/     # ament_python package (core + g1_perception/ros nodes)
 ├── tools/                 # record → frames → label → train → export → bench
 ├── docker/                # Humble image + pip constraints
 ├── deploy/                # robot requirements

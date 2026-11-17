@@ -11,7 +11,7 @@ from g1_perception.core.geometry import (
     yaw_error_mod90_deg,
     yaw_on_plane_deg,
 )
-from g1_perception.core.pnp import (
+from g1_perception.core.pnp_solver import (
     TopFaceSolution,
     cube_center_from_top,
     normal_angle_deg,

@@ -17,7 +17,7 @@ from g1_perception.core.geometry import (
     table_plane_around,
 )
 from g1_perception.core.keypoints import N_CORNERS, order_top_corners
-from g1_perception.core.pnp import (
+from g1_perception.core.pnp_solver import (
     normal_angle_deg,
     pose_on_table,
     solve_top_face,

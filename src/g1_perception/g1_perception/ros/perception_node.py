@@ -1,4 +1,4 @@
-"""ROS 2 node: RGB-D → per-slot cube colour and pose (thin wrapper)."""
+"""ROS 2 node: RGB-D → per-slot cube colour and pose."""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ import numpy as np  # noqa: E402
 import rclpy  # noqa: E402
 from cv_bridge import CvBridge, CvBridgeError  # noqa: E402
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup  # noqa: E402
-from rclpy.duration import Duration  # noqa: E402
 from rclpy.executors import (  # noqa: E402
     ExternalShutdownException,
     MultiThreadedExecutor,
@@ -32,15 +31,11 @@ from rclpy.qos import (  # noqa: E402
     qos_profile_sensor_data,
     ReliabilityPolicy,
 )
-from rclpy.time import Time  # noqa: E402
 from sensor_msgs.msg import CameraInfo, Image  # noqa: E402
 from std_msgs.msg import Header  # noqa: E402
 from std_srvs.srv import Trigger  # noqa: E402
 from tf2_ros import (  # noqa: E402
     Buffer,
-    ConnectivityException,
-    ExtrapolationException,
-    LookupException,
     StaticTransformBroadcaster,
     TransformBroadcaster,
     TransformListener,
@@ -54,18 +49,14 @@ from g1_perception.core.frame_utils import (  # noqa: E402
     depth_to_m,
     intrinsics_from_k,
 )
-from g1_perception.core.geometry import transform_pose  # noqa: E402
-from g1_perception.core.slot_assign import AssignmentResult, assign_slots  # noqa: E402
+from g1_perception.core.slot_assign import assign_slots  # noqa: E402
 from g1_perception.core.tracker import (  # noqa: E402
     CubeTracker,
     fresh_tracks,
     TrackedCube,
 )
 from g1_perception.core.types import Frame, SlotResult  # noqa: E402
-from g1_perception.core.visibility import (  # noqa: E402
-    angular_speed_deg_s,
-    mark_hidden,
-)
+from g1_perception.core.visibility import mark_hidden  # noqa: E402
 from g1_perception.core.voting import SlotVoter, VotedSlot  # noqa: E402
 from g1_perception.node_config import (  # noqa: E402
     DEFAULT_PARAMS,
@@ -76,25 +67,14 @@ from g1_perception.node_config import (  # noqa: E402
     voter_kwargs,
 )
 from g1_perception.pipeline import ROIS_MODE_NONE, Pipeline  # noqa: E402
-from g1_perception.ros_conversions import (  # noqa: E402
-    cube_colors_msg,
-    pose_to_transform,
-    voted_to_detection_array,
+from g1_perception.ros.conversions import voted_to_detection_array  # noqa: E402
+from g1_perception.ros.task1 import (  # noqa: E402
+    NamedCubeFrame,
+    StartLayout,
+    Task1Publisher,
+    Task1State,
 )
-
-# The logic node of exercise 1 reads the start pose of cube <name> from the
-# static TF frame <name>_start.
-START_FRAME_SUFFIX = '_start'
-SEEN_FRAME_SUFFIX = '_seen'
-
-
-@dataclass(frozen=True)
-class _StartLayout:
-    """Frozen start layout; the start poses are in ``header.frame_id``."""
-
-    start_id: int
-    header: Header
-    cubes: list[NamedCube]
+from g1_perception.ros.transforms import FrameTransforms  # noqa: E402
 
 
 @dataclass
@@ -122,7 +102,7 @@ class _PublishBundle:
     inference_ms: float
     frame_id: str
     cubes: list[NamedCube]
-    start: _StartLayout | None
+    start: StartLayout | None
 
 
 class PerceptionNode(Node):
@@ -185,38 +165,35 @@ class PerceptionNode(Node):
         self._tracker = CubeTracker(**tracker_kwargs(p)) if self._free else None
         self._assign_kw = slot_assign_kwargs(p)
         self._fresh_s = float(p['fresh_s'])
-        self._registry = (
-            CubeRegistry(**registry_kwargs(p)) if self._free else None
-        )
-        self._target_frame = str(p['target_frame']).strip()
         self._hidden_kw = {
             'size': float(p['cube_size_m']),
             'border_px': int(p['pose_border_px']),
             'min_visible_ratio': float(p['min_visible_ratio']),
         }
-        self._max_rot_deg_s = float(p['max_camera_rot_deg_s'])
-        # (stamp, rotation_xyzw) of the camera in target_frame, last frame.
-        self._prev_camera: tuple[float, np.ndarray] | None = None
-        self._start_frame = str(p['start_frame']).strip()
         self._bridge = CvBridge()
-
-        # Tracker, voter, registry and the frozen start: worker and ~/reset.
-        self._state_lock = threading.Lock()
-        self._start: _StartLayout | None = None
-        self._track_ids: dict[str, int | None] = {}
-        # Frame of the registry's poses (target_frame), None before a layout.
-        self._cube_frame: str | None = None
-
-        # Used only by the publish timer.
-        self._published_start_id = 0
-        self._last_cube_tf_ns = -1
-        self._last_seen_tf_ns = -1
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
+        self._tf = FrameTransforms(
+            self._tf_buffer,
+            self.get_logger(),
+            target_frame=str(p['target_frame']).strip(),
+            tf_timeout_s=float(p['tf_timeout_s']),
+            max_rot_deg_s=float(p['max_camera_rot_deg_s']),
+        )
+
+        self._state_lock = threading.Lock()
+        self._task1: Task1State | None = None
+        if self._free:
+            self._task1 = Task1State(
+                CubeRegistry(**registry_kwargs(p)),
+                str(p['start_frame']).strip(),
+                self._tf.lookup,
+                self.get_logger(),
+            )
+
         self._tf_broadcaster = TransformBroadcaster(self)
         self._static_tf_broadcaster = StaticTransformBroadcaster(self)
-
         self._pub_cubes = self.create_publisher(
             Detection3DArray, p['output_topic'], 10
         )
@@ -233,6 +210,11 @@ class PerceptionNode(Node):
                 reliability=ReliabilityPolicy.RELIABLE,
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
             ),
+        )
+        self._task1_pub = Task1Publisher(
+            self._static_tf_broadcaster,
+            self._tf_broadcaster,
+            self._pub_colors,
         )
         self._reset_service = self.create_service(
             Trigger, '~/reset', self._on_reset
@@ -299,12 +281,12 @@ class PerceptionNode(Node):
             f"target_frame={p['target_frame'] or '(camera)'} "
             f"publish_rate_hz={rate} -> {p['output_topic']}"
         )
-        if self._registry is not None:
+        if self._task1 is not None:
             self.get_logger().info(
                 f"exercise 1: cubes {p['cube_name_prefix']}<place> along "
                 f"{p['slot_axis']}, start frames in "
-                f"{self._start_frame or '(target_frame)'}, colours -> "
-                f"{p['cube_colors_topic']}"
+                f"{str(p['start_frame']).strip() or '(target_frame)'}, "
+                f"colours -> {p['cube_colors_topic']}"
             )
         else:
             self.get_logger().warning(
@@ -372,18 +354,18 @@ class PerceptionNode(Node):
         )
 
         cubes: list[NamedCube] = []
-        start: _StartLayout | None = None
+        start: StartLayout | None = None
         if self._free:
-            assert self._tracker is not None and self._registry is not None
+            assert self._tracker is not None and self._task1 is not None
             n_det = len(results)
             n_pose = sum(1 for r in results if r.pose is not None)
             # Track in target_frame: the camera moves with the torso, the
             # cubes do not. Without its TF the frame is shown but not tracked.
             results, n_hidden = mark_hidden(results, frame, **self._hidden_kw)
-            results_tf, frame_id, camera_rot = self._results_to_target(
+            results_tf, frame_id, camera_rot = self._tf.results_to_target(
                 results, camera_header
             )
-            moving = camera_rot is not None and self._camera_turning(
+            moving = camera_rot is not None and self._tf.camera_turning(
                 camera_rot, frame.stamp
             )
             if moving and results_tf:
@@ -395,18 +377,18 @@ class PerceptionNode(Node):
                 voted = []
                 debug_results = results
                 with self._state_lock:
-                    start = self._start
+                    start = self._task1.start
             else:
                 with self._state_lock:
                     tracked = self._tracker.update(results_tf, frame.stamp)
                     fresh = fresh_tracks(tracked, frame.stamp, self._fresh_s)
                     assignment = assign_slots(fresh, **self._assign_kw)
-                    cubes = self._update_registry(
+                    cubes = self._task1.update(
                         assignment, tracked, camera_header, frame_id,
                         frame.stamp,
                     )
-                    latched = self._registry.latched
-                    start = self._start
+                    latched = self._task1.registry.latched
+                    start = self._task1.start
                 voted = assignment.slots
                 debug_results = _debug_results_from_tracks(fresh, voted)
                 # Once the layout is frozen, pushed cubes leave the line on purpose.
@@ -422,7 +404,7 @@ class PerceptionNode(Node):
         else:
             with self._state_lock:
                 voted_cam = self._voter.update(results, frame.stamp)
-            voted, frame_id = self._voted_to_target(voted_cam, camera_header)
+            voted, frame_id = self._tf.voted_to_target(voted_cam, camera_header)
             debug_results = results
 
         with self._result_lock:
@@ -455,7 +437,25 @@ class PerceptionNode(Node):
                 bundle.voted, out_header, float(self._params['cube_size_m'])
             )
         )
-        self._publish_task_outputs(bundle)
+
+        with self._state_lock:
+            known = (
+                self._task1.registry.known() if self._task1 is not None else []
+            )
+            cube_frame = (
+                self._task1.cube_frame if self._task1 is not None else None
+            )
+        self._task1_pub.publish_outputs(
+            bundle.start,
+            NamedCubeFrame(
+                frame_id=bundle.frame_id,
+                stamp=bundle.camera_header.stamp,
+                cubes=bundle.cubes,
+            ),
+            known,
+            cube_frame,
+            self.get_clock().now(),
+        )
 
         mask = union_mask(bundle.results, bundle.rgb.shape[:2])
         mask_msg = self._bridge.cv2_to_imgmsg(mask, encoding='mono8')
@@ -475,72 +475,6 @@ class PerceptionNode(Node):
             debug_msg.header = bundle.camera_header
             self._pub_debug.publish(debug_msg)
 
-    def _publish_task_outputs(self, bundle: _PublishBundle) -> None:
-        """Publish a new start layout once, and the TF of every named cube."""
-        start = bundle.start
-        if start is not None and start.start_id != self._published_start_id:
-            # Start frames before the colours: the logic node starts the task
-            # with whatever <name>_start frames TF has when its colours came.
-            # One message: StaticTransformBroadcaster keeps only the last one.
-            self._static_tf_broadcaster.sendTransform([
-                pose_to_transform(
-                    cube.start_pose, start.header, cube.name + START_FRAME_SUFFIX
-                )
-                for cube in start.cubes
-            ])
-            self._pub_colors.publish(cube_colors_msg(start.cubes))
-            self._published_start_id = start.start_id
-
-        self._publish_known_cubes()
-        self._publish_seen_cubes(bundle)
-
-    def _publish_seen_cubes(self, bundle: _PublishBundle) -> None:
-        """
-        Publish TF <cube>_seen for the cubes seen in the frame of ``bundle``.
-
-        Stamped with that frame, once per frame: a cube out of view or under
-        the hand gets no new one, so a reader sees how old its pose is.
-        """
-        stamp = Time.from_msg(bundle.camera_header.stamp).nanoseconds
-        seen = [c for c in bundle.cubes if c.pose is not None]
-        if not seen or not bundle.frame_id or stamp <= self._last_seen_tf_ns:
-            return
-        self._last_seen_tf_ns = stamp
-        header = Header(
-            stamp=bundle.camera_header.stamp, frame_id=bundle.frame_id
-        )
-        self._tf_broadcaster.sendTransform([
-            pose_to_transform(c.pose, header, c.name + SEEN_FRAME_SUFFIX)
-            for c in seen
-        ])
-
-    def _publish_known_cubes(self) -> None:
-        """
-        Publish TF <cube> for every cube of the layout, also out of view.
-
-        A cube keeps the pose it was last seen at, so it does not vanish
-        while the camera looks away (torso turned). Stamped with the current
-        time on every tick: a TF that stops being updated looks lost.
-        """
-        with self._state_lock:
-            if self._registry is None:
-                return
-            cubes = self._registry.known()
-            frame_id = self._cube_frame
-        if not cubes or not frame_id:
-            return
-        now = self.get_clock().now()
-        # A paused simulation clock would repeat the stamp (TF_REPEATED_DATA).
-        if now.nanoseconds <= self._last_cube_tf_ns:
-            return
-        self._last_cube_tf_ns = now.nanoseconds
-        header = Header(stamp=now.to_msg(), frame_id=frame_id)
-        self._tf_broadcaster.sendTransform([
-            pose_to_transform(cube.last_pose, header, cube.name)
-            for cube in cubes
-            if cube.last_pose is not None
-        ])
-
     def _on_reset(
         self,
         request: Trigger.Request,
@@ -550,99 +484,19 @@ class PerceptionNode(Node):
         with self._state_lock:
             if self._tracker is not None:
                 self._tracker.reset()
-            if self._registry is not None:
-                self._registry.reset()
+            if self._task1 is not None:
+                self._task1.reset()
             self._voter.reset()
-            self._start = None
-            self._track_ids = {}
-            self._cube_frame = None
         with self._result_lock:
             self._result = None
 
         response.success = True
         response.message = (
             'Waiting for a new start layout'
-            if self._registry is not None else 'Votes cleared'
+            if self._task1 is not None else 'Votes cleared'
         )
         self.get_logger().info(f'reset: {response.message}')
         return response
-
-    def _update_registry(
-        self,
-        assignment: AssignmentResult,
-        tracked: list[TrackedCube],
-        camera_header: Header,
-        frame_id: str,
-        stamp: float,
-    ) -> list[NamedCube]:
-        """Name the cubes of a frame and anchor a newly frozen start layout."""
-        assert self._registry is not None
-        cubes = self._registry.update(assignment, tracked, stamp)
-        if not cubes:
-            return cubes
-        self._cube_frame = frame_id
-
-        if self._start is None or self._start.start_id != self._registry.start_id:
-            self._start = self._anchor_start(cubes, camera_header, frame_id)
-            if self._start is None:
-                # Without the start frame TF the logic would wait forever.
-                self._registry.reset()
-                return []
-            self._track_ids = {}
-            layout = ', '.join(f'{c.name}={c.label}' for c in cubes)
-            self.get_logger().info(
-                f'start layout frozen: {layout} '
-                f'(start frames in {self._start.header.frame_id})'
-            )
-
-        for cube in cubes:
-            previous = self._track_ids.get(cube.name)
-            if previous is not None and cube.track_id != previous:
-                self.get_logger().info(
-                    f'{cube.name} found again as track {cube.track_id}'
-                )
-            self._track_ids[cube.name] = cube.track_id
-        return cubes
-
-    def _anchor_start(
-        self,
-        cubes: list[NamedCube],
-        camera_header: Header,
-        frame_id: str,
-    ) -> _StartLayout | None:
-        """Express the start poses in start_frame; None without its TF."""
-        assert self._registry is not None
-        parent = self._start_frame or frame_id
-        if parent != frame_id:
-            tf = self._lookup(
-                parent, frame_id, camera_header,
-                'start layout not frozen',
-            )
-            if tf is None:
-                return None
-            translation, rotation = tf
-            cubes = [
-                replace(
-                    cube,
-                    start_pose=transform_pose(
-                        cube.start_pose, translation, rotation
-                    ),
-                )
-                for cube in cubes
-            ]
-        return _StartLayout(
-            start_id=self._registry.start_id,
-            header=Header(stamp=camera_header.stamp, frame_id=parent),
-            cubes=cubes,
-        )
-
-    def _camera_turning(self, rotation: np.ndarray, stamp: float) -> bool:
-        """Return True when the camera turns faster than max_camera_rot_deg_s."""
-        prev, self._prev_camera = self._prev_camera, (stamp, rotation)
-        if self._max_rot_deg_s <= 0.0 or prev is None:
-            return False
-        speed = angular_speed_deg_s(prev[1], prev[0], rotation, stamp)
-        return speed > self._max_rot_deg_s
 
     def _on_stats_timer(self) -> None:
         """Log mean inference time and dropped frames every 10 s."""
@@ -690,96 +544,6 @@ class PerceptionNode(Node):
             K=intrinsics_from_k(info.k),
             stamp=float(stamp),
         )
-
-    def _lookup_tf(
-        self,
-        camera_header: Header,
-    ) -> tuple[np.ndarray, np.ndarray, str] | None:
-        """Return ``(translation, rotation_xyzw, target)`` or None."""
-        target = self._target_frame
-        source = camera_header.frame_id
-        if not target or target == source:
-            return None
-        tf = self._lookup(
-            target, source, camera_header, f'publishing in {source}'
-        )
-        if tf is None:
-            return None
-        return tf[0], tf[1], target
-
-    def _lookup(
-        self,
-        target: str,
-        source: str,
-        header: Header,
-        consequence: str,
-    ) -> tuple[np.ndarray, np.ndarray] | None:
-        """Return ``(translation, rotation_xyzw)`` of ``target <- source``."""
-        try:
-            tf = self._tf_buffer.lookup_transform(
-                target,
-                source,
-                Time.from_msg(header.stamp),
-                timeout=Duration(seconds=float(self._params['tf_timeout_s'])),
-            )
-        except (
-            LookupException,
-            ConnectivityException,
-            ExtrapolationException,
-        ) as exc:
-            self.get_logger().warning(
-                f'No TF {source} -> {target} ({exc}); {consequence}',
-                throttle_duration_sec=5.0,
-            )
-            return None
-        t = tf.transform.translation
-        q = tf.transform.rotation
-        return np.array([t.x, t.y, t.z]), np.array([q.x, q.y, q.z, q.w])
-
-    def _voted_to_target(
-        self,
-        voted: list[VotedSlot],
-        camera_header: Header,
-    ) -> tuple[list[VotedSlot], str]:
-        """Transform voted poses to ``target_frame``; fall back to camera."""
-        tf = self._lookup_tf(camera_header)
-        if tf is None:
-            return voted, camera_header.frame_id
-        translation, rotation, target = tf
-        return [
-            replace(v, pose=transform_pose(v.pose, translation, rotation))
-            if v.pose is not None else v
-            for v in voted
-        ], target
-
-    def _results_to_target(
-        self,
-        results: list[SlotResult],
-        camera_header: Header,
-    ) -> tuple[list[SlotResult] | None, str, np.ndarray | None]:
-        """
-        Transform result poses to ``target_frame`` before tracking.
-
-        Returns ``(results, frame, camera rotation in target_frame)``; the
-        rotation is None without a ``target_frame``. Returns ``(None, camera
-        frame, None)`` when ``target_frame`` is set but its TF is missing:
-        mixing frames would split every track.
-        """
-        source = camera_header.frame_id
-        target = self._target_frame
-        if not target or target == source:
-            return list(results), source, None
-        tf = self._lookup(
-            target, source, camera_header, 'frame not tracked'
-        )
-        if tf is None:
-            return None, source, None
-        translation, rotation = tf
-        return [
-            replace(r, pose=transform_pose(r.pose, translation, rotation))
-            if r.pose is not None else r
-            for r in results
-        ], target, rotation
 
 
 def _debug_results_from_tracks(

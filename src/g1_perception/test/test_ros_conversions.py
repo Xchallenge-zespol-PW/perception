@@ -20,7 +20,7 @@ from g1_perception.core.types import (  # noqa: E402
     Pose,
 )
 from g1_perception.core.voting import VotedSlot  # noqa: E402
-from g1_perception.ros_conversions import (  # noqa: E402
+from g1_perception.ros.conversions import (  # noqa: E402
     cube_colors_msg,
     pose_to_transform,
     voted_to_detection_array,

@@ -32,15 +32,18 @@ RealSense RGB-D + camera_info  (ROS 2)
 | `core.dataset` | `load_frame` from `data/index.csv` |
 | `core.geometry` | deprojection, plane RANSAC, cube pose, `transform_pose` |
 | `core.keypoints` | canonical order of the 4 top-face corners (`c0..c3`) |
-| `core.pnp` | top-face pose from 4 corners (IPPE_SQUARE), pick solution by table normal, yaw on table, body center |
+| `core.pnp_solver` | top-face pose from 4 corners (IPPE_SQUARE), pick solution by table normal, yaw on table, body center |
 | `core.frame_utils` | depth mm → m, `K` from `camera_info` |
 | `core.debug_vis` | debug image (ROI / track id, masks, labels, yaw), mono8 mask sum |
 | `pipeline` | `@register`, `Pipeline.from_config` / `process` (`rois_mode`) |
 | `segmenters/` | `hsv`, `yolo_seg` |
 | `pose/` | `centroid`, `geometric` |
 | `node_config` | node params → `Pipeline` / `SlotVoter` config (no `rclpy` import) |
-| `ros_conversions` | `VotedSlot` → `vision_msgs/Detection3DArray` |
-| `perception_node` | ROS 2 node (rclpy): RGB-D sync, cv_bridge, TF, publish |
+| `ros/conversions` | `VotedSlot` → `vision_msgs/Detection3DArray` |
+| `ros/transforms` | TF lookups + camera-motion gate |
+| `ros/task1` | exercise-1 start layout, cube TF / colours |
+| `ros/perception_node` | ROS 2 node (rclpy): RGB-D sync, pipeline, publish |
+| `ros/apriltag_node` | AprilTag detector node |
 | `tools/` | record → frames → calibrate → autolabel → train |
 
 TensorRT export (`.engine`) is supported in the model loader.
@@ -59,9 +62,12 @@ src/g1_perception/
 │   ├── pose/                    # centroid, geometric, pnp
 │   ├── pipeline.py
 │   ├── node_config.py
-│   ├── ros_conversions.py
-│   ├── perception_node.py
-│   └── apriltag_node.py
+│   └── ros/
+│       ├── conversions.py
+│       ├── transforms.py
+│       ├── task1.py
+│       ├── perception_node.py
+│       └── apriltag_node.py
 └── test/
 ```
 

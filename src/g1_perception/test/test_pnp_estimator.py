@@ -11,7 +11,7 @@ from g1_perception.core.geometry import (
     yaw_error_mod90_deg,
     yaw_on_plane_deg,
 )
-from g1_perception.core.pnp import project_points, top_face_model
+from g1_perception.core.pnp_solver import project_points, top_face_model
 from g1_perception.core.types import Detection, Frame
 from g1_perception.pipeline import clear_registry, get_registered, register
 from g1_perception.pose.geometric import GeometricPoseEstimator
